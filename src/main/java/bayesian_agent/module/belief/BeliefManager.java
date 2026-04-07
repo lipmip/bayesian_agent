@@ -33,6 +33,7 @@ public class BeliefManager {
         }
         currentBelief.knownRefuges.addAll(obs.visibleRefuges);
         currentBelief.burningBuildings.addAll(obs.burningBuildings);
+        currentBelief.burningBuildings.removeAll(obs.extinguishedBuildings);
         currentBelief.blockedRoads.addAll(obs.blockedRoads);
         currentBelief.knownBlockadeIds.addAll(obs.blockadeIds);
     }

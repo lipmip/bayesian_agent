@@ -18,6 +18,8 @@ public class Observation {
 
     // FireBrigade
     public final Set<EntityID> burningBuildings      = new HashSet<>();
+    public final Map<EntityID, FireIntensity> fireIntensity   = new LinkedHashMap<>();
+    public final Set<EntityID> extinguishedBuildings          = new HashSet<>();
 
     // PoliceForce
     /** EntityID дорог с завалами (для навигации). */
@@ -48,6 +50,18 @@ public class Observation {
             return buriedness > 0 ? BURIED : FREE;
         }
     }
+
+    public enum FireIntensity {
+        NONE, LOW, MEDIUM, HIGH, BURNT;
+
+        public static FireIntensity from(int fieryness) {
+            if (fieryness <= 0) return NONE;
+            if (fieryness <= 2) return LOW;
+            if (fieryness <= 5) return MEDIUM;
+            if (fieryness <= 7) return HIGH;
+            return BURNT;
+        }
+    }    
 
     @Override
     public String toString() {
