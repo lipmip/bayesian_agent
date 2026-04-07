@@ -24,6 +24,13 @@ public class BeliefManager {
             currentBelief.victims.put(e.getKey(),
                     Belief.VictimBelief.fromObservation(e.getValue()));
         }
+        for (Map.Entry<EntityID, Observation.BuriedStatus> e : obs.buriedStatus.entrySet()) {
+            Belief.VictimBelief vb = currentBelief.victims.get(e.getKey());
+            if (vb != null) {
+                vb.likelyBuried =
+                    (e.getValue() == Observation.BuriedStatus.BURIED);
+            }
+        }
         currentBelief.knownRefuges.addAll(obs.visibleRefuges);
         currentBelief.burningBuildings.addAll(obs.burningBuildings);
         currentBelief.blockedRoads.addAll(obs.blockedRoads);

@@ -47,7 +47,12 @@ public class ObservationProcessor {
     private void processCivilian(Civilian civ) {
         int hp = civ.isHPDefined() ? civ.getHP() : 10000;
         currentObservation.victims.put(civ.getID(),
-                Observation.VictimStatus.fromHP(hp));
+                                       Observation.VictimStatus.fromHP(hp));
+
+        // НОВОЕ: читаем buriedness
+        int buried = civ.isBuriednessDefined() ? civ.getBuriedness() : 0;
+        currentObservation.buriedStatus.put(civ.getID(),
+                                            Observation.BuriedStatus.from(buried));
     }
 
     private void processRoad(Road road) {

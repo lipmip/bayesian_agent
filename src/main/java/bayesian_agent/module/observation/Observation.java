@@ -12,6 +12,7 @@ public class Observation {
 
     // AmbulanceTeam
     public final Map<EntityID, VictimStatus> victims = new LinkedHashMap<>();
+    public final Map<EntityID, BuriedStatus> buriedStatus = new LinkedHashMap<>();
     public boolean isCarrying                        = false;
     public final Set<EntityID> visibleRefuges        = new HashSet<>();
 
@@ -36,6 +37,15 @@ public class Observation {
             if (hp < 3000) return CRITICAL;
             if (hp < 7500) return INJURED;
             return HEALTHY;
+        }
+    }
+
+    public enum BuriedStatus {
+        FREE,    // buriedness == 0
+        BURIED;  // buriedness > 0
+
+        public static BuriedStatus from(int buriedness) {
+            return buriedness > 0 ? BURIED : FREE;
         }
     }
 
