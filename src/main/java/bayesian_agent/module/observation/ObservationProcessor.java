@@ -56,10 +56,16 @@ public class ObservationProcessor {
     }
 
     private void processRoad(Road road) {
-        if (road.isBlockadesDefined() && !road.getBlockades().isEmpty()) {
-            currentObservation.blockedRoads.add(road.getID());
-            for (EntityID blockadeId : road.getBlockades()) {
-                currentObservation.blockadeIds.add(blockadeId);
+        if (road.isBlockadesDefined()) {
+            if (!road.getBlockades().isEmpty()) {
+                // Дорога заблокирована
+                currentObservation.blockedRoads.add(road.getID());
+                for (EntityID blockadeId : road.getBlockades()) {
+                    currentObservation.blockadeIds.add(blockadeId);
+                }
+            } else {
+                // Дорога видна и чистая — фиксируем как расчищенную
+                currentObservation.clearedRoads.add(road.getID());
             }
         }
     }

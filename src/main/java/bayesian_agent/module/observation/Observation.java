@@ -25,6 +25,7 @@ public class Observation {
     // PoliceForce
     /** EntityID дорог с завалами (для навигации). */
     public final Set<EntityID> blockedRoads          = new HashSet<>();
+    public final Set<EntityID> clearedRoads = new HashSet<>();
 
     /**
      * EntityID самих сущностей Blockade.

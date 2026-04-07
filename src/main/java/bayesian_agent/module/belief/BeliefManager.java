@@ -42,6 +42,7 @@ public class BeliefManager {
         currentBelief.burningBuildings.addAll(obs.burningBuildings);
         currentBelief.burningBuildings.removeAll(obs.extinguishedBuildings);
         currentBelief.blockedRoads.addAll(obs.blockedRoads);
+        currentBelief.blockedRoads.removeAll(obs.clearedRoads);
         currentBelief.knownBlockadeIds.addAll(obs.blockadeIds);
     }
 
