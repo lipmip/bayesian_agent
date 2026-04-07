@@ -11,7 +11,8 @@ public class Belief {
 
     // AmbulanceTeam
     public final Map<EntityID, VictimBelief> victims = new LinkedHashMap<>();
-    public final Set<EntityID> knownRefuges          = new HashSet<>();
+    public enum RefugeState { AVAILABLE, FULL, UNKNOWN }
+    public final Map<EntityID, RefugeState> knownRefuges = new LinkedHashMap<>();
 
     // FireBrigade
     public final Set<EntityID> burningBuildings      = new HashSet<>();

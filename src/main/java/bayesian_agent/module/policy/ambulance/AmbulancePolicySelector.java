@@ -7,6 +7,7 @@ import bayesian_agent.module.policy.AgentAction;
 import rescuecore2.standard.entities.Human;
 import rescuecore2.standard.entities.StandardEntity;
 import rescuecore2.worldmodel.EntityID;
+
 import java.util.*;
 
 /**
@@ -25,11 +26,21 @@ public class AmbulancePolicySelector {
     }
 
     public void select(Belief belief) {
+        // Случай 1: везём жертву — едем в убежище или выгружаем
+        if (agentInfo.someoneOnBoard() != null) {
+            selectedAction = buildUnloadAction(belief);
+            return;
+        }
+
+        // Случай 2: есть известные живые жертвы
         EntityID best = pickBestVictim(belief);
         if (best != null) {
             selectedAction = buildRescueOrMoveAction(best, belief);
             return;
         }
+
+        // Случай 3: нечего делать
+        // TODO (Этап 2): Search — обход непосещённых зданий
         selectedAction = AgentAction.rest();
     }
 
@@ -45,11 +56,7 @@ public class AmbulancePolicySelector {
     }
 
     private AgentAction buildRescueOrMoveAction(EntityID victimId, Belief belief) {
-        EntityID agentPos = agentInfo.getPosition();
-
-        // ИСПРАВЛЕНИЕ: worldInfo.getPosition(EntityID) в данной версии ADF
-        // возвращает StandardEntity, а не EntityID напрямую.
-        // Получаем позицию жертвы через Human.getPosition().
+        EntityID agentPos  = agentInfo.getPosition();
         EntityID victimPos = getEntityPosition(victimId);
 
         if (agentPos != null && agentPos.equals(victimPos)) {
@@ -64,7 +71,34 @@ public class AmbulancePolicySelector {
     }
 
     /**
-     * Возвращает EntityID позиции сущности (здания/дороги где она стоит).
+     * Строит действие для доставки жертвы в убежище.
+     * Учитывает ёмкость убежища — не едет в полное.
+     */
+    private AgentAction buildUnloadAction(Belief belief) {
+        EntityID pos = agentInfo.getPosition();
+
+        // Уже стоим в доступном убежище — выгружаем
+        if (pos != null && belief.knownRefuges.containsKey(pos)
+                && belief.knownRefuges.get(pos) != Belief.RefugeState.FULL) {
+            return AgentAction.unload();
+        }
+
+        // Едем к ближайшему доступному убежищу
+        for (Map.Entry<EntityID, Belief.RefugeState> e
+                : belief.knownRefuges.entrySet()) {
+            if (e.getValue() != Belief.RefugeState.FULL) {
+                return AgentAction.move(
+                        Collections.singletonList(e.getKey()));
+            }
+        }
+
+        // Убежищ не знаем — стоим
+        // TODO (Этап 2): Search для обнаружения убежища
+        return AgentAction.rest();
+    }
+
+    /**
+     * Возвращает EntityID позиции сущности.
      * Human.getPosition() возвращает EntityID напрямую.
      */
     private EntityID getEntityPosition(EntityID entityId) {

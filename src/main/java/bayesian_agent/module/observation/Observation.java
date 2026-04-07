@@ -15,6 +15,7 @@ public class Observation {
     public final Map<EntityID, BuriedStatus> buriedStatus = new LinkedHashMap<>();
     public boolean isCarrying                        = false;
     public final Set<EntityID> visibleRefuges        = new HashSet<>();
+    public final Map<EntityID, RefugeCapacity> refugeCapacity = new LinkedHashMap<>();
 
     // FireBrigade
     public final Set<EntityID> burningBuildings      = new HashSet<>();
@@ -61,6 +62,12 @@ public class Observation {
             if (fieryness <= 7) return HIGH;
             return BURNT;
         }
+    }    
+
+    public enum RefugeCapacity {
+        AVAILABLE,  // есть свободные места
+        FULL,       // мест нет
+        UNKNOWN;    // данных нет (убежище не в зоне видимости)
     }    
 
     @Override

@@ -66,8 +66,17 @@ public class ObservationProcessor {
 
     private void processBuilding(Building building, EntityID id) {
         if (building instanceof Refuge) {
+            Refuge refuge = (Refuge) building;
             currentObservation.visibleRefuges.add(id);
-        }
+
+            Observation.RefugeCapacity cap = Observation.RefugeCapacity.UNKNOWN;
+            if (refuge.isBedCapacityDefined() && refuge.isOccupiedBedsDefined()) {
+                cap = refuge.getOccupiedBeds() >= refuge.getBedCapacity()
+                        ? Observation.RefugeCapacity.FULL
+                        : Observation.RefugeCapacity.AVAILABLE;
+            }
+            currentObservation.refugeCapacity.put(id, cap);
+        }        
         if (building.isFierynessDefined() && building.getFieryness() > 0) {
             currentObservation.burningBuildings.add(id);
             currentObservation.fireIntensity.put(id,

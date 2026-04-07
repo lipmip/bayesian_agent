@@ -31,7 +31,14 @@ public class BeliefManager {
                     (e.getValue() == Observation.BuriedStatus.BURIED);
             }
         }
-        currentBelief.knownRefuges.addAll(obs.visibleRefuges);
+        for (Map.Entry<EntityID, Observation.RefugeCapacity> e : obs.refugeCapacity.entrySet()) {
+            Belief.RefugeState state = switch (e.getValue()) {
+                case AVAILABLE -> Belief.RefugeState.AVAILABLE;
+                case FULL      -> Belief.RefugeState.FULL;
+                default        -> Belief.RefugeState.UNKNOWN;
+            };
+            currentBelief.knownRefuges.put(e.getKey(), state);
+        }
         currentBelief.burningBuildings.addAll(obs.burningBuildings);
         currentBelief.burningBuildings.removeAll(obs.extinguishedBuildings);
         currentBelief.blockedRoads.addAll(obs.blockedRoads);
