@@ -2,7 +2,11 @@ package bayesian_agent.module.observation;
 
 import adf.core.agent.info.AgentInfo;
 import adf.core.agent.info.WorldInfo;
-import rescuecore2.standard.entities.*;
+import rescuecore2.standard.entities.Building;
+import rescuecore2.standard.entities.Civilian;
+import rescuecore2.standard.entities.Refuge;
+import rescuecore2.standard.entities.Road;
+import rescuecore2.standard.entities.StandardEntity;
 import rescuecore2.worldmodel.ChangeSet;
 import rescuecore2.worldmodel.EntityID;
 
@@ -34,16 +38,10 @@ public class ObservationProcessor {
     }
 
     private boolean checkIsCarrying() {
-        StandardEntity me = agentInfo.me();
-        if (me instanceof AmbulanceTeam) {
-            AmbulanceTeam ambulance = (AmbulanceTeam) me;
-            // TODO (Этап 0.2): уточнить реальное имя метода:
-            //   grep -r "isLoaded\|someoneOnBoard\|loadedHuman" adf-core-java/src/
-            // Вариант A: return ambulance.isLoaded();
-            // Вариант B: return ambulance.getLoadedHuman() != null;
-            return false; // временная заглушка
-        }
-        return false;
+        // agentInfo.someoneOnBoard() возвращает Human если агент везёт жертву,
+        // null если нет. Работает только для AmbulanceTeam — для остальных
+        // типов агентов метод также безопасен (вернёт null).
+        return agentInfo.someoneOnBoard() != null;
     }
 
     private void processCivilian(Civilian civ) {
