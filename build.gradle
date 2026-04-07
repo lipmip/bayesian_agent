@@ -1,0 +1,59 @@
+// build.gradle — сборка команды bayesian_agent
+// Совместимость: Gradle 8.x, JDK 21
+
+plugins {
+    id 'java'
+}
+
+group   = 'bayesian_agent'
+version = '0.1.0-SNAPSHOT'
+
+sourceCompatibility = JavaVersion.VERSION_21
+targetCompatibility = JavaVersion.VERSION_21
+
+repositories {
+    mavenLocal()
+    mavenCentral()
+    maven { url 'https://jitpack.io' }
+}
+
+configurations.all {
+    resolutionStrategy.cacheChangingModulesFor 0, 'seconds'
+}
+
+dependencies {
+    implementation('com.github.roborescue:adf-core:master-SNAPSHOT') {
+        exclude group: 'com.google.common', module: 'google-collect'
+    }
+    implementation('com.github.roborescue:rcrs-server:master-SNAPSHOT') {
+        exclude group: 'net.sourceforge.jsi', module: 'jsi'
+    }
+    implementation 'com.google.guava:guava:31.1-jre'
+
+    // jsi — пространственный индекс, нужен для WorldModel агентов.
+    // Не публикуется в Maven Central, берём из локальной копии rcrs-server.
+    implementation files("${System.getProperty('user.home')}/rcrs-server/lib/jsi-1.0.0.jar")
+}
+
+// Fat-jar — все зависимости упакованы в один файл
+jar {
+    manifest {
+        attributes 'Main-Class': 'adf.core.Main'
+    }
+    from {
+        configurations.runtimeClasspath.collect {
+            it.isDirectory() ? it : zipTree(it)
+        }
+    }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+// Задача запуска агентов — вызывается из launch.sh
+task launch(type: JavaExec) {
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'adf.core.Main'
+    if (project.hasProperty('args')) {
+        args project.property('args').split(' ')
+    }
+    standardInput = System.in
+}
