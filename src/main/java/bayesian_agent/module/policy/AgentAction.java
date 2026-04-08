@@ -18,16 +18,26 @@ import java.util.List;
 public class AgentAction {
 
     public enum Type {
-        MOVE,        // Двигаться по маршруту               [все]
-        RESCUE,      // Извлечь погребённую жертву           [AmbulanceTeam]
-        LOAD,        // Загрузить жертву в машину            [AmbulanceTeam]
-        UNLOAD,      // Выгрузить жертву в убежище           [AmbulanceTeam]
-        EXTINGUISH,  // Тушить горящее здание                [FireBrigade]
-        CLEAR,       // Расчистить завал на дороге           [PoliceForce]
-        REST         // Ничего не делать (заглушка / ожидание)
+        MOVE,           // Двигаться по маршруту                [все]
+        MOVE_TO_POINT,  // Двигаться к координатам (не через PathPlanning)
+        RESCUE,         // Извлечь погребённую жертву           [AmbulanceTeam]
+        LOAD,           // Загрузить жертву в машину            [AmbulanceTeam]
+        UNLOAD,         // Выгрузить жертву в убежище           [AmbulanceTeam]
+        EXTINGUISH,     // Тушить горящее здание                [FireBrigade]
+        CLEAR,          // Расчистить завал на дороге           [PoliceForce]
+        REST            // Ничего не делать (заглушка / ожидание)
     }
 
     public final Type type;
+
+    public int destX, destY;
+
+    public static AgentAction moveToPoint(int x, int y) {
+        AgentAction a = new AgentAction(Type.MOVE_TO_POINT, null, null);
+        a.destX = x;
+        a.destY = y;
+        return a;
+    }
 
     /** Для MOVE: список waypoints (EntityID дорог / зданий). */
     public final List<EntityID> path;

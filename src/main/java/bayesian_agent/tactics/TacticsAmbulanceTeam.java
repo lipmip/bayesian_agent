@@ -8,6 +8,7 @@ import adf.core.agent.info.ScenarioInfo;
 import adf.core.agent.info.WorldInfo;
 import adf.core.agent.module.ModuleManager;
 import adf.core.agent.precompute.PrecomputeData;
+import adf.core.component.module.algorithm.PathPlanning;
 import bayesian_agent.action.ActionExecutor;
 import bayesian_agent.module.belief.BeliefManager;
 import bayesian_agent.module.observation.ObservationProcessor;
@@ -24,14 +25,17 @@ public class TacticsAmbulanceTeam
     private BeliefManager           beliefManager;
     private AmbulancePolicySelector policySelector;
     private ActionExecutor          actionExecutor;
+    private PathPlanning            pathPlanning;
 
     @Override
     public void initialize(AgentInfo ai, WorldInfo wi, ScenarioInfo si,
                            ModuleManager mm, MessageManager msg, DevelopData dd) {
         observationProcessor = new ObservationProcessor(ai, wi);
         beliefManager        = new BeliefManager(ai, wi);
-        policySelector       = new AmbulancePolicySelector(ai, wi);
         actionExecutor       = new ActionExecutor(ai, wi, si);
+        pathPlanning         = mm.getModule("TacticsAmbulanceTeam.PathPlanning",
+                                            "adf.impl.module.algorithm.DijkstraPathPlanning");
+        policySelector       = new AmbulancePolicySelector(ai, wi, pathPlanning);
         Logger.info(ai, "initialized");
     }
 
@@ -61,6 +65,7 @@ public class TacticsAmbulanceTeam
         beliefManager.update(observationProcessor.getObservation());
         policySelector.select(beliefManager.getBelief());
         Action action = actionExecutor.translate(policySelector.getSelectedAction());
+        Logger.info(ai, "obs=" + observationProcessor.getObservation() + " belief=" + beliefManager.getBelief());
         Logger.info(ai, "action=" + policySelector.getSelectedAction());
         return action;
     }

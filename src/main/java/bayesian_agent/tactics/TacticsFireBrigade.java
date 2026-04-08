@@ -8,6 +8,7 @@ import adf.core.agent.info.ScenarioInfo;
 import adf.core.agent.info.WorldInfo;
 import adf.core.agent.module.ModuleManager;
 import adf.core.agent.precompute.PrecomputeData;
+import adf.core.component.module.algorithm.PathPlanning;
 import bayesian_agent.action.ActionExecutor;
 import bayesian_agent.module.belief.BeliefManager;
 import bayesian_agent.module.observation.ObservationProcessor;
@@ -21,14 +22,16 @@ public class TacticsFireBrigade extends adf.core.component.tactics.TacticsFireBr
     private BeliefManager             beliefManager;
     private FireBrigadePolicySelector policySelector;
     private ActionExecutor            actionExecutor;
+    private PathPlanning              pathPlanning;
 
     @Override
     public void initialize(AgentInfo ai, WorldInfo wi, ScenarioInfo si,
                            ModuleManager mm, MessageManager msg, DevelopData dd) {
         observationProcessor = new ObservationProcessor(ai, wi);
         beliefManager        = new BeliefManager(ai, wi);
-        policySelector       = new FireBrigadePolicySelector(ai, wi);
-        actionExecutor       = new ActionExecutor(ai, wi, si);
+        pathPlanning         = mm.getModule("TacticsFireBrigade.PathPlanning",
+                                            "adf.impl.module.algorithm.DijkstraPathPlanning");
+        policySelector       = new FireBrigadePolicySelector(ai, wi, pathPlanning);        actionExecutor       = new ActionExecutor(ai, wi, si);
         Logger.info(ai, "initialized");
     }
 

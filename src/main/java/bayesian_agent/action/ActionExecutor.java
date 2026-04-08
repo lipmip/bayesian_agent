@@ -13,8 +13,11 @@ import adf.core.agent.info.AgentInfo;
 import adf.core.agent.info.ScenarioInfo;
 import adf.core.agent.info.WorldInfo;
 import bayesian_agent.module.policy.AgentAction;
+import rescuecore2.standard.entities.Blockade;
+import rescuecore2.standard.entities.StandardEntity;
 import rescuecore2.worldmodel.EntityID;
 
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -47,6 +50,11 @@ public class ActionExecutor {
                 if (path == null || path.isEmpty()) return new ActionRest();
                 return new ActionMove(path);
 
+            case MOVE_TO_POINT:
+                return new ActionMove(
+                    Collections.singletonList(agentInfo.getPosition()),
+                    action.destX, action.destY);
+
             case RESCUE:
                 if (action.targetId == null) return new ActionRest();
                 return new ActionRescue(action.targetId);
@@ -65,7 +73,30 @@ public class ActionExecutor {
 
             case CLEAR:
                 if (action.targetId == null) return new ActionRest();
-                return new ActionClear(action.targetId);
+                StandardEntity blockadeEntity = worldInfo.getEntity(action.targetId);
+                if (blockadeEntity instanceof Blockade) {
+                    Blockade blockade = (Blockade) blockadeEntity;
+                    // AKClearArea: координаты точки куда агент направляет очиститель.
+                    // Используем координаты агента + вектор к центру завала,
+                    // но ограниченный радиусом clearRepairDistance.
+                    int agentX = (int) agentInfo.getX();
+                    int agentY = (int) agentInfo.getY();
+                    int bx = blockade.getX();
+                    int by = blockade.getY();
+                    double dist = Math.hypot(bx - agentX, by - agentY);
+                    int clearDist = scenarioInfo.getClearRepairDistance();
+                    int targetX, targetY;
+                    if (dist <= clearDist) {
+                        targetX = bx;
+                        targetY = by;
+                    } else {
+                        // Нормализуем вектор до clearRepairDistance
+                        targetX = agentX + (int)((bx - agentX) * clearDist / dist);
+                        targetY = agentY + (int)((by - agentY) * clearDist / dist);
+                    }
+                    return new ActionClear(targetX, targetY, blockade);
+                }
+                return new ActionRest();
 
             case REST:
             default:

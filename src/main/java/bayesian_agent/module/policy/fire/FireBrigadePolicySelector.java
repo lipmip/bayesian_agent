@@ -2,6 +2,7 @@ package bayesian_agent.module.policy.fire;
 
 import adf.core.agent.info.AgentInfo;
 import adf.core.agent.info.WorldInfo;
+import adf.core.component.module.algorithm.PathPlanning;
 import bayesian_agent.module.belief.Belief;
 import bayesian_agent.module.policy.AgentAction;
 import rescuecore2.standard.entities.*;
@@ -16,11 +17,29 @@ public class FireBrigadePolicySelector {
 
     private final AgentInfo agentInfo;
     private final WorldInfo worldInfo;
+    private final PathPlanning pathPlanning;
     private AgentAction selectedAction = AgentAction.rest();
 
-    public FireBrigadePolicySelector(AgentInfo agentInfo, WorldInfo worldInfo) {
-        this.agentInfo = agentInfo;
-        this.worldInfo = worldInfo;
+    public FireBrigadePolicySelector(AgentInfo agentInfo, WorldInfo worldInfo,
+                                   PathPlanning pathPlanning) {
+        this.agentInfo    = agentInfo;
+        this.worldInfo    = worldInfo;
+        this.pathPlanning = pathPlanning;
+    }
+
+    private EntityID findBurningInRange(Belief belief) {
+        EntityID pos = agentInfo.getPosition();
+        if (pos == null) return null;
+        StandardEntity posEntity = worldInfo.getEntity(pos);
+        if (posEntity instanceof Area) {
+            Area area = (Area) posEntity;
+            for (EntityID neighbourId : area.getNeighbours()) {
+                if (belief.burningBuildings.contains(neighbourId)) {
+                    return neighbourId;
+                }
+            }
+        }
+        return null;
     }
 
     public void select(Belief belief) {
@@ -31,10 +50,10 @@ public class FireBrigadePolicySelector {
         }
         EntityID known = pickBestBurningBuilding(belief);
         if (known != null) {
-            selectedAction = AgentAction.move(Collections.singletonList(known));
+            selectedAction = buildMoveToFire(known);
             return;
         }
-        selectedAction = AgentAction.rest();
+        selectedAction = buildSearchMove();
     }
 
     /**
@@ -45,26 +64,41 @@ public class FireBrigadePolicySelector {
      * (возвращает пустой список если соседей нет).
      * Также агент стоит на Road, а не внутри Building — проверяем соседей.
      */
-    private EntityID findBurningInRange(Belief belief) {
+    private AgentAction buildMoveToFire(EntityID target) {
         EntityID pos = agentInfo.getPosition();
-        if (pos == null) return null;
-
-        StandardEntity posEntity = worldInfo.getEntity(pos);
-        if (posEntity instanceof Area) {
-            Area area = (Area) posEntity;
-            // getNeighbours() возвращает List<EntityID> соседних Area
-            for (EntityID neighbourId : area.getNeighbours()) {
-                if (belief.burningBuildings.contains(neighbourId)) {
-                    return neighbourId;
-                }
-            }
-        }
-        return null;
+        if (pos == null) return AgentAction.rest();
+        List<EntityID> path = pathPlanning
+            .setFrom(pos)
+            .setDestination(target)
+            .calc()
+            .getResult();
+        if (path != null && !path.isEmpty()) return AgentAction.move(path);
+        return AgentAction.rest();
     }
 
     private EntityID pickBestBurningBuilding(Belief belief) {
         return belief.burningBuildings.isEmpty() ? null
                 : belief.burningBuildings.iterator().next();
+    }
+
+    private AgentAction buildSearchMove() {
+        EntityID pos = agentInfo.getPosition();
+        if (pos == null) return AgentAction.rest();
+        rescuecore2.standard.entities.StandardEntity e = worldInfo.getEntity(pos);
+        if (e instanceof rescuecore2.standard.entities.Area) {
+            List<EntityID> neighbours = 
+                ((rescuecore2.standard.entities.Area) e).getNeighbours();
+            if (!neighbours.isEmpty()) {
+                // Берём случайного соседа
+                EntityID next = neighbours.get(
+                    (int)(Math.random() * neighbours.size()));
+                List<EntityID> path = pathPlanning
+                    .setFrom(pos).setDestination(next).calc().getResult();
+                if (path != null && !path.isEmpty()) 
+                    return AgentAction.move(path);
+            }
+        }
+        return AgentAction.rest();
     }
 
     public AgentAction getSelectedAction() { return selectedAction; }

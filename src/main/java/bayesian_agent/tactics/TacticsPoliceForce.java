@@ -8,6 +8,7 @@ import adf.core.agent.info.ScenarioInfo;
 import adf.core.agent.info.WorldInfo;
 import adf.core.agent.module.ModuleManager;
 import adf.core.agent.precompute.PrecomputeData;
+import adf.core.component.module.algorithm.PathPlanning;
 import bayesian_agent.action.ActionExecutor;
 import bayesian_agent.module.belief.BeliefManager;
 import bayesian_agent.module.observation.ObservationProcessor;
@@ -21,13 +22,16 @@ public class TacticsPoliceForce extends adf.core.component.tactics.TacticsPolice
     private BeliefManager             beliefManager;
     private PoliceForcePolicySelector policySelector;
     private ActionExecutor            actionExecutor;
+    private PathPlanning              pathPlanning;
 
     @Override
     public void initialize(AgentInfo ai, WorldInfo wi, ScenarioInfo si,
                            ModuleManager mm, MessageManager msg, DevelopData dd) {
         observationProcessor = new ObservationProcessor(ai, wi);
         beliefManager        = new BeliefManager(ai, wi);
-        policySelector       = new PoliceForcePolicySelector(ai, wi);
+        pathPlanning         = mm.getModule("TacticsPoliceForce.PathPlanning",
+                                            "adf.impl.module.algorithm.DijkstraPathPlanning");
+        policySelector       = new PoliceForcePolicySelector(ai, wi, pathPlanning);
         actionExecutor       = new ActionExecutor(ai, wi, si);
         Logger.info(ai, "initialized");
     }
@@ -53,11 +57,13 @@ public class TacticsPoliceForce extends adf.core.component.tactics.TacticsPolice
     public Action think(AgentInfo ai, WorldInfo wi, ScenarioInfo si,
                         ModuleManager mm, MessageManager msg, DevelopData dd) {
         Logger.info(ai, "tick " + ai.getTime());
+        Logger.info(ai, "pos=" + ai.getPosition() + " x=" + ai.getX() + " y=" + ai.getY());  // ← добавить
         ChangeSet cs = ai.getChanged();
         observationProcessor.process(cs);
         beliefManager.update(observationProcessor.getObservation());
         policySelector.select(beliefManager.getBelief());
         Action action = actionExecutor.translate(policySelector.getSelectedAction());
+        Logger.info(ai, "obs=" + observationProcessor.getObservation() + " belief=" + beliefManager.getBelief());
         Logger.info(ai, "action=" + policySelector.getSelectedAction());
         return action;
     }

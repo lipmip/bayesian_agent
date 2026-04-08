@@ -2,6 +2,7 @@ package bayesian_agent.module.policy.ambulance;
 
 import adf.core.agent.info.AgentInfo;
 import adf.core.agent.info.WorldInfo;
+import adf.core.component.module.algorithm.PathPlanning;
 import bayesian_agent.module.belief.Belief;
 import bayesian_agent.module.policy.AgentAction;
 import rescuecore2.standard.entities.Human;
@@ -18,11 +19,14 @@ public class AmbulancePolicySelector {
 
     private final AgentInfo agentInfo;
     private final WorldInfo worldInfo;
+    private final PathPlanning pathPlanning;
     private AgentAction selectedAction = AgentAction.rest();
 
-    public AmbulancePolicySelector(AgentInfo agentInfo, WorldInfo worldInfo) {
-        this.agentInfo = agentInfo;
-        this.worldInfo = worldInfo;
+    public AmbulancePolicySelector(AgentInfo agentInfo, WorldInfo worldInfo,
+                                   PathPlanning pathPlanning) {
+        this.agentInfo    = agentInfo;
+        this.worldInfo    = worldInfo;
+        this.pathPlanning = pathPlanning;
     }
 
     public void select(Belief belief) {
@@ -41,7 +45,7 @@ public class AmbulancePolicySelector {
 
         // Случай 3: нечего делать
         // TODO (Этап 2): Search — обход непосещённых зданий
-        selectedAction = AgentAction.rest();
+        selectedAction = buildSearchMove();
     }
 
     private EntityID pickBestVictim(Belief belief) {
@@ -65,9 +69,16 @@ public class AmbulancePolicySelector {
             return AgentAction.load(victimId);
         }
 
-        List<EntityID> path = new ArrayList<>();
-        if (victimPos != null) path.add(victimPos);
-        return AgentAction.move(path);
+        // Реальный маршрут через Dijkstra
+        if (victimPos != null && agentPos != null) {
+            List<EntityID> path = pathPlanning
+                .setFrom(agentPos)
+                .setDestination(victimPos)
+                .calc()
+                .getResult();
+            if (path != null && !path.isEmpty()) return AgentAction.move(path);
+        }
+        return AgentAction.rest();
     }
 
     /**
@@ -77,23 +88,43 @@ public class AmbulancePolicySelector {
     private AgentAction buildUnloadAction(Belief belief) {
         EntityID pos = agentInfo.getPosition();
 
-        // Уже стоим в доступном убежище — выгружаем
         if (pos != null && belief.knownRefuges.containsKey(pos)
                 && belief.knownRefuges.get(pos) != Belief.RefugeState.FULL) {
             return AgentAction.unload();
         }
 
-        // Едем к ближайшему доступному убежищу
         for (Map.Entry<EntityID, Belief.RefugeState> e
                 : belief.knownRefuges.entrySet()) {
             if (e.getValue() != Belief.RefugeState.FULL) {
-                return AgentAction.move(
-                        Collections.singletonList(e.getKey()));
+                EntityID refuge = e.getKey();
+                List<EntityID> path = pathPlanning
+                    .setFrom(pos)
+                    .setDestination(refuge)
+                    .calc()
+                    .getResult();
+                if (path != null && !path.isEmpty()) return AgentAction.move(path);
             }
         }
+        return AgentAction.rest();
+    }
 
-        // Убежищ не знаем — стоим
-        // TODO (Этап 2): Search для обнаружения убежища
+    private AgentAction buildSearchMove() {
+        EntityID pos = agentInfo.getPosition();
+        if (pos == null) return AgentAction.rest();
+        rescuecore2.standard.entities.StandardEntity e = worldInfo.getEntity(pos);
+        if (e instanceof rescuecore2.standard.entities.Area) {
+            List<EntityID> neighbours = 
+                ((rescuecore2.standard.entities.Area) e).getNeighbours();
+            if (!neighbours.isEmpty()) {
+                // Берём случайного соседа
+                EntityID next = neighbours.get(
+                    (int)(Math.random() * neighbours.size()));
+                List<EntityID> path = pathPlanning
+                    .setFrom(pos).setDestination(next).calc().getResult();
+                if (path != null && !path.isEmpty()) 
+                    return AgentAction.move(path);
+            }
+        }
         return AgentAction.rest();
     }
 
