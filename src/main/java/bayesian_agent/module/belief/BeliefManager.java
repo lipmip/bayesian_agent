@@ -19,7 +19,7 @@ public class BeliefManager {
     }
 
     public void update(Observation obs) {
-        // Шаг 1: PREDICT - применяем decay к невидимым жертвам 
+        // PREDICT - применяем decay к невидимым жертвам 
         for (Map.Entry<EntityID, Belief.VictimBelief> e
                 : currentBelief.victims.entrySet()) {
             if (!obs.victims.containsKey(e.getKey())) {
@@ -29,7 +29,13 @@ public class BeliefManager {
             }
         }
 
-        // Шаг 2: UPDATE - обновляем из наблюдений 
+        currentBelief.victims.entrySet().removeIf(e -> {
+            Belief.VictimBelief vb = e.getValue();
+            
+            return vb.pDead > 0.99 && vb.ticksSinceObserved > 5;
+        });
+
+        // UPDATE - обновляем из наблюдений 
         for (Map.Entry<EntityID, Observation.VictimStatus> e
                 : obs.victims.entrySet()) {
             Belief.VictimBelief vb = Belief.VictimBelief.fromObservation(e.getValue());
