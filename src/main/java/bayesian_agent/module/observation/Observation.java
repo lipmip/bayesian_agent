@@ -4,27 +4,26 @@ import rescuecore2.worldmodel.EntityID;
 import java.util.*;
 
 /**
- * Дискретизированное наблюдение oₜ за один тик.
+ * Дискретизированное наблюдение o_t за один тик.
  */
 public class Observation {
 
     public EntityID agentPosition = null;
 
     // AmbulanceTeam
-    public final Map<EntityID, VictimStatus> victims = new LinkedHashMap<>();
-    public final Map<EntityID, BuriedStatus> buriedStatus = new LinkedHashMap<>();
-    public boolean isCarrying                        = false;
-    public final Set<EntityID> visibleRefuges        = new HashSet<>();
-    public final Map<EntityID, RefugeCapacity> refugeCapacity = new LinkedHashMap<>();
+    public final Map<EntityID, VictimStatus> victims            = new LinkedHashMap<>();
+    public final Map<EntityID, BuriedStatus> buriedStatus       = new LinkedHashMap<>();
+    public       boolean                     isCarrying         = false;
+    public final Set<EntityID> visibleRefuges                   = new HashSet<>();
+    public final Map<EntityID, RefugeCapacity> refugeCapacity   = new LinkedHashMap<>();
 
     // FireBrigade
-    public final Set<EntityID> burningBuildings      = new HashSet<>();
-    public final Map<EntityID, FireIntensity> fireIntensity   = new LinkedHashMap<>();
-    public final Set<EntityID> extinguishedBuildings          = new HashSet<>();
+    public final Set<EntityID> burningBuildings                 = new HashSet<>();
+    public final Map<EntityID, FireIntensity> fireIntensity     = new LinkedHashMap<>();
+    public final Set<EntityID> extinguishedBuildings            = new HashSet<>();
 
     // PoliceForce
-    /** EntityID дорог с завалами (для навигации). */
-    public final Set<EntityID> blockedRoads          = new HashSet<>();
+    public final Set<EntityID> blockedRoads = new HashSet<>();
     public final Set<EntityID> clearedRoads = new HashSet<>();
 
     /**
@@ -43,10 +42,11 @@ public class Observation {
             return HEALTHY;
         }
     }
+    public final Map<EntityID, Integer> victimDamage = new LinkedHashMap<>();
 
     public enum BuriedStatus {
-        FREE,    // buriedness == 0
-        BURIED;  // buriedness > 0
+        FREE,
+        BURIED;
 
         public static BuriedStatus from(int buriedness) {
             return buriedness > 0 ? BURIED : FREE;
@@ -66,9 +66,9 @@ public class Observation {
     }    
 
     public enum RefugeCapacity {
-        AVAILABLE,  // есть свободные места
-        FULL,       // мест нет
-        UNKNOWN;    // данных нет (убежище не в зоне видимости)
+        AVAILABLE,
+        FULL,
+        UNKNOWN;
     }    
 
     @Override

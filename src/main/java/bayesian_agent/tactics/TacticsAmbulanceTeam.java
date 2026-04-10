@@ -10,14 +10,15 @@ import adf.core.agent.module.ModuleManager;
 import adf.core.agent.precompute.PrecomputeData;
 import adf.core.component.module.algorithm.PathPlanning;
 import bayesian_agent.action.ActionExecutor;
+import bayesian_agent.module.belief.Belief;
 import bayesian_agent.module.belief.BeliefManager;
 import bayesian_agent.module.observation.ObservationProcessor;
 import bayesian_agent.module.policy.ambulance.AmbulancePolicySelector;
 import bayesian_agent.util.Logger;
 import rescuecore2.worldmodel.ChangeSet;
+import rescuecore2.worldmodel.EntityID;
+import java.util.Map;
 
-// ИСПРАВЛЕНИЕ: убран import adf.core.component.tactics.TacticsAmbulanceTeam —
-// имя совпадало с именем этого класса. Родитель указан только через FQN.
 public class TacticsAmbulanceTeam
         extends adf.core.component.tactics.TacticsAmbulanceTeam {
 
@@ -60,13 +61,22 @@ public class TacticsAmbulanceTeam
     public Action think(AgentInfo ai, WorldInfo wi, ScenarioInfo si,
                         ModuleManager mm, MessageManager msg, DevelopData dd) {
         Logger.info(ai, "tick " + ai.getTime());
+
         ChangeSet cs = ai.getChanged();
         observationProcessor.process(cs);
+
         beliefManager.update(observationProcessor.getObservation());
+        for (Map.Entry<EntityID, Belief.VictimBelief> e : beliefManager.getBelief().victims.entrySet()) {
+            Belief.VictimBelief vb = e.getValue();
+            Logger.info(ai, "victim=" + e.getKey() + " " + vb);
+        }
+
         policySelector.select(beliefManager.getBelief());
         Action action = actionExecutor.translate(policySelector.getSelectedAction());
+        
         Logger.info(ai, "obs=" + observationProcessor.getObservation() + " belief=" + beliefManager.getBelief());
         Logger.info(ai, "action=" + policySelector.getSelectedAction());
+
         return action;
     }
 }

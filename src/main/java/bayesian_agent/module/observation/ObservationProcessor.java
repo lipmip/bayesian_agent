@@ -39,7 +39,7 @@ public class ObservationProcessor {
 
     private boolean checkIsCarrying() {
         // agentInfo.someoneOnBoard() возвращает Human если агент везёт жертву,
-        // null если нет. Работает только для AmbulanceTeam — для остальных
+        // null если нет. Работает только для AmbulanceTeam - для остальных
         // типов агентов метод также безопасен (вернёт null).
         return agentInfo.someoneOnBoard() != null;
     }
@@ -53,6 +53,9 @@ public class ObservationProcessor {
         int buried = civ.isBuriednessDefined() ? civ.getBuriedness() : 0;
         currentObservation.buriedStatus.put(civ.getID(),
                                             Observation.BuriedStatus.from(buried));
+
+        int dmg = civ.isDamageDefined() ? civ.getDamage() : 0;
+        currentObservation.victimDamage.put(civ.getID(), dmg);                                    
     }
 
     private void processRoad(Road road) {
@@ -64,7 +67,7 @@ public class ObservationProcessor {
                     currentObservation.blockadeIds.add(blockadeId);
                 }
             } else {
-                // Дорога видна и чистая — фиксируем как расчищенную
+                // Дорога видна и чистая - фиксируем как расчищенную
                 currentObservation.clearedRoads.add(road.getID());
             }
         }
@@ -88,7 +91,7 @@ public class ObservationProcessor {
             currentObservation.fireIntensity.put(id,
                     Observation.FireIntensity.from(building.getFieryness()));
         }
-        // Здание видно и не горит — значит потушено или никогда не горело
+        // Здание видно и не горит - значит потушено или никогда не горело
         if (building.isFierynessDefined() && building.getFieryness() == 0) {
             currentObservation.extinguishedBuildings.add(id);
         }

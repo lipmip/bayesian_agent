@@ -5,12 +5,12 @@ import rescuecore2.worldmodel.EntityID;
 import java.util.*;
 
 /**
- * Убеждение агента bₜ.
+ * Убеждение агента b_t.
  */
 public class Belief {
 
     // AmbulanceTeam
-    public final Map<EntityID, VictimBelief> victims = new LinkedHashMap<>();
+    public final Map<EntityID, VictimBelief> victims     = new LinkedHashMap<>();
     public enum RefugeState { AVAILABLE, FULL, UNKNOWN }
     public final Map<EntityID, RefugeState> knownRefuges = new LinkedHashMap<>();
 
@@ -22,11 +22,13 @@ public class Belief {
     public final Set<EntityID> knownBlockadeIds      = new HashSet<>();
 
     public static class VictimBelief {
-        public double pHealthy  = 0.0;
-        public double pInjured  = 0.0;
-        public double pCritical = 0.0;
-        public double pDead     = 0.0;
-        public boolean likelyBuried = false;
+        public double  pHealthy           = 0.0;
+        public double  pInjured           = 0.0;
+        public double  pCritical          = 0.0;
+        public double  pDead              = 0.0;
+        public int     lastKnownDamage    = 0;
+        public int     ticksSinceObserved = 0;
+        public boolean likelyBuried       = false;
 
         public static VictimBelief fromObservation(Observation.VictimStatus s) {
             VictimBelief b = new VictimBelief();
@@ -43,8 +45,8 @@ public class Belief {
 
         @Override
         public String toString() {
-            return String.format("VB{alive=%.2f,crit=%.2f,buried=%b}",
-                    pAlive(), pCritical, likelyBuried);
+            return String.format("VB{alive=%.3f,crit=%.3f,dmg=%d,ticks=%d,buried=%b}",
+                    pAlive(), pCritical, lastKnownDamage, ticksSinceObserved, likelyBuried);
         }
     }
 
