@@ -10,13 +10,13 @@ import rescuecore2.worldmodel.EntityID;
 import java.util.*;
 
 /**
- * Выбор действия для агента-пожарного: bₜ → aₜ.
+ * Выбор действия для агента-пожарного: b_t → a_t.
  * [ЗАМЕНИТЬ: POMCP]
  */
 public class FireBrigadePolicySelector {
 
-    private final AgentInfo agentInfo;
-    private final WorldInfo worldInfo;
+    private final AgentInfo    agentInfo;
+    private final WorldInfo    worldInfo;
     private final PathPlanning pathPlanning;
     private AgentAction selectedAction = AgentAction.rest();
 
@@ -30,6 +30,7 @@ public class FireBrigadePolicySelector {
     private EntityID findBurningInRange(Belief belief) {
         EntityID pos = agentInfo.getPosition();
         if (pos == null) return null;
+
         StandardEntity posEntity = worldInfo.getEntity(pos);
         if (posEntity instanceof Area) {
             Area area = (Area) posEntity;
@@ -39,6 +40,7 @@ public class FireBrigadePolicySelector {
                 }
             }
         }
+
         return null;
     }
 
@@ -48,31 +50,28 @@ public class FireBrigadePolicySelector {
             selectedAction = AgentAction.extinguish(nearby);
             return;
         }
+
         EntityID known = pickBestBurningBuilding(belief);
         if (known != null) {
             selectedAction = buildMoveToFire(known);
             return;
         }
+
         selectedAction = buildSearchMove();
     }
 
-    /**
-     * Ищет горящее здание рядом с позицией агента.
-     *
-     * ИСПРАВЛЕНИЕ: убрана проверка isNeighboursDefined() — метода нет
-     * в данной версии rescuecore2. Используем getNeighbours() напрямую
-     * (возвращает пустой список если соседей нет).
-     * Также агент стоит на Road, а не внутри Building — проверяем соседей.
-     */
+    // Ищет горящее здание рядом с позицией агента
     private AgentAction buildMoveToFire(EntityID target) {
         EntityID pos = agentInfo.getPosition();
         if (pos == null) return AgentAction.rest();
+
         List<EntityID> path = pathPlanning
             .setFrom(pos)
             .setDestination(target)
             .calc()
             .getResult();
         if (path != null && !path.isEmpty()) return AgentAction.move(path);
+
         return AgentAction.rest();
     }
 
@@ -84,12 +83,12 @@ public class FireBrigadePolicySelector {
     private AgentAction buildSearchMove() {
         EntityID pos = agentInfo.getPosition();
         if (pos == null) return AgentAction.rest();
+
         rescuecore2.standard.entities.StandardEntity e = worldInfo.getEntity(pos);
         if (e instanceof rescuecore2.standard.entities.Area) {
             List<EntityID> neighbours = 
                 ((rescuecore2.standard.entities.Area) e).getNeighbours();
             if (!neighbours.isEmpty()) {
-                // Берём случайного соседа
                 EntityID next = neighbours.get(
                     (int)(Math.random() * neighbours.size()));
                 List<EntityID> path = pathPlanning
@@ -98,6 +97,7 @@ public class FireBrigadePolicySelector {
                     return AgentAction.move(path);
             }
         }
+        
         return AgentAction.rest();
     }
 

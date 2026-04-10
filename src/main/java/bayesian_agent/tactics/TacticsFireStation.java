@@ -12,7 +12,7 @@ import adf.core.agent.precompute.PrecomputeData;
  * Заглушка центра управления TacticsFireStation.
  * TacticsCenter.think() возвращает void — центры не планируют действия,
  * а только координируют полевых агентов через CommandPicker.
- * Нет метода precompute() — только resume() и preparate().
+ * Нет метода precompute() - только resume() и preparate().
  */
 public class TacticsFireStation
         extends adf.core.component.tactics.TacticsFireStation {

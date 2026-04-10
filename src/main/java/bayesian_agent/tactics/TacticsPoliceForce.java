@@ -33,6 +33,7 @@ public class TacticsPoliceForce extends adf.core.component.tactics.TacticsPolice
                                             "adf.impl.module.algorithm.DijkstraPathPlanning");
         policySelector       = new PoliceForcePolicySelector(ai, wi, pathPlanning);
         actionExecutor       = new ActionExecutor(ai, wi, si);
+
         Logger.info(ai, "initialized");
     }
 
@@ -58,13 +59,17 @@ public class TacticsPoliceForce extends adf.core.component.tactics.TacticsPolice
                         ModuleManager mm, MessageManager msg, DevelopData dd) {
         Logger.info(ai, "tick " + ai.getTime());
         Logger.info(ai, "pos=" + ai.getPosition() + " x=" + ai.getX() + " y=" + ai.getY());  // ← добавить
+        
         ChangeSet cs = ai.getChanged();
+
         observationProcessor.process(cs);
         beliefManager.update(observationProcessor.getObservation());
         policySelector.select(beliefManager.getBelief());
         Action action = actionExecutor.translate(policySelector.getSelectedAction());
+
         Logger.info(ai, "obs=" + observationProcessor.getObservation() + " belief=" + beliefManager.getBelief());
         Logger.info(ai, "action=" + policySelector.getSelectedAction());
+
         return action;
     }
 }

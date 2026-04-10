@@ -21,9 +21,9 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * ШАГ 4 ТИКА: aₜ → ADF Action.
+ * ШАГ 4 ТИКА: a_t → ADF Action.
  *
- * В новом ADF think() возвращает Action напрямую — agentInfo.act() удалён.
+ * В новом ADF think() возвращает Action напрямую - agentInfo.act() удалён.
  * translate() публичный, вызывается из оркестратора через return.
  */
 public class ActionExecutor {

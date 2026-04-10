@@ -32,6 +32,7 @@ public class TacticsFireBrigade extends adf.core.component.tactics.TacticsFireBr
         pathPlanning         = mm.getModule("TacticsFireBrigade.PathPlanning",
                                             "adf.impl.module.algorithm.DijkstraPathPlanning");
         policySelector       = new FireBrigadePolicySelector(ai, wi, pathPlanning);        actionExecutor       = new ActionExecutor(ai, wi, si);
+        
         Logger.info(ai, "initialized");
     }
 
@@ -56,12 +57,16 @@ public class TacticsFireBrigade extends adf.core.component.tactics.TacticsFireBr
     public Action think(AgentInfo ai, WorldInfo wi, ScenarioInfo si,
                         ModuleManager mm, MessageManager msg, DevelopData dd) {
         Logger.info(ai, "tick " + ai.getTime());
+
         ChangeSet cs = ai.getChanged();
         observationProcessor.process(cs);
+
         beliefManager.update(observationProcessor.getObservation());
         policySelector.select(beliefManager.getBelief());
         Action action = actionExecutor.translate(policySelector.getSelectedAction());
+
         Logger.info(ai, "action=" + policySelector.getSelectedAction());
+
         return action;
     }
 }

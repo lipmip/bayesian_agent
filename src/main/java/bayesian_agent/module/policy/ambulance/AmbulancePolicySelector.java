@@ -12,7 +12,7 @@ import rescuecore2.worldmodel.EntityID;
 import java.util.*;
 
 /**
- * Выбор действия для агента-санитара: bₜ → aₜ.
+ * Выбор действия для агента-санитара: b_t → a_t.
  * [ЗАМЕНИТЬ: POMCP]
  */
 public class AmbulancePolicySelector {
@@ -30,32 +30,34 @@ public class AmbulancePolicySelector {
     }
 
     public void select(Belief belief) {
-        // Случай 1: везём жертву — едем в убежище или выгружаем
+        // Везём жертву - едем в убежище или выгружаем
         if (agentInfo.someoneOnBoard() != null) {
             selectedAction = buildUnloadAction(belief);
             return;
         }
 
-        // Случай 2: есть известные живые жертвы
+        // Есть известные живые жертвы
         EntityID best = pickBestVictim(belief);
         if (best != null) {
             selectedAction = buildRescueOrMoveAction(best, belief);
             return;
         }
 
-        // Случай 3: нечего делать
-        // TODO (Этап 2): Search — обход непосещённых зданий
+        // Нечего делать
+        // TODO (Этап 2): Search - обход непосещённых зданий
         selectedAction = buildSearchMove();
     }
 
     private EntityID pickBestVictim(Belief belief) {
         EntityID critical = null, injured = null;
+
         for (Map.Entry<EntityID, Belief.VictimBelief> e : belief.victims.entrySet()) {
             Belief.VictimBelief vb = e.getValue();
             if (vb.pAlive() < 0.01) continue;
             if (vb.pCritical > 0.5 && critical == null) critical = e.getKey();
             else if (vb.pInjured > 0.5 && injured == null) injured = e.getKey();
         }
+
         return critical != null ? critical : injured;
     }
 
@@ -78,12 +80,13 @@ public class AmbulancePolicySelector {
                 .getResult();
             if (path != null && !path.isEmpty()) return AgentAction.move(path);
         }
+
         return AgentAction.rest();
     }
 
     /**
      * Строит действие для доставки жертвы в убежище.
-     * Учитывает ёмкость убежища — не едет в полное.
+     * Учитывает ёмкость убежища - не едет в полное.
      */
     private AgentAction buildUnloadAction(Belief belief) {
         EntityID pos = agentInfo.getPosition();
@@ -111,12 +114,13 @@ public class AmbulancePolicySelector {
     private AgentAction buildSearchMove() {
         EntityID pos = agentInfo.getPosition();
         if (pos == null) return AgentAction.rest();
+
         rescuecore2.standard.entities.StandardEntity e = worldInfo.getEntity(pos);
         if (e instanceof rescuecore2.standard.entities.Area) {
             List<EntityID> neighbours = 
                 ((rescuecore2.standard.entities.Area) e).getNeighbours();
+
             if (!neighbours.isEmpty()) {
-                // Берём случайного соседа
                 EntityID next = neighbours.get(
                     (int)(Math.random() * neighbours.size()));
                 List<EntityID> path = pathPlanning
@@ -125,18 +129,18 @@ public class AmbulancePolicySelector {
                     return AgentAction.move(path);
             }
         }
+        
         return AgentAction.rest();
     }
 
-    /**
-     * Возвращает EntityID позиции сущности.
-     * Human.getPosition() возвращает EntityID напрямую.
-     */
+    //Возвращает EntityID позиции сущности
     private EntityID getEntityPosition(EntityID entityId) {
         StandardEntity entity = worldInfo.getEntity(entityId);
+
         if (entity instanceof Human) {
             return ((Human) entity).getPosition();
         }
+
         return null;
     }
 

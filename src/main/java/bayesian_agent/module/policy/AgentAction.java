@@ -4,7 +4,7 @@ import rescuecore2.worldmodel.EntityID;
 import java.util.List;
 
 /**
- * Логическое действие агента aₜ — внутреннее представление.
+ * Логическое действие агента a_t - внутреннее представление.
  *
  * Не является ADF Action напрямую.
  * ActionExecutor переводит его в конкретный ADF-объект.
@@ -45,7 +45,7 @@ public class AgentAction {
     /** Для RESCUE / LOAD / EXTINGUISH / CLEAR: EntityID цели. */
     public final EntityID targetId;
 
-    // ── Фабричные методы ────────────────────────────────────────────
+    // Фабричные методы 
 
     public static AgentAction move(List<EntityID> path) {
         return new AgentAction(Type.MOVE, path, null);
@@ -75,7 +75,7 @@ public class AgentAction {
         return new AgentAction(Type.REST, null, null);
     }
 
-    // ── Конструктор ─────────────────────────────────────────────────
+    // Конструктор
 
     private AgentAction(Type type, List<EntityID> path, EntityID targetId) {
         this.type     = type;

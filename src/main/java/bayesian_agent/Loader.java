@@ -16,7 +16,7 @@ import adf.core.component.tactics.TacticsPoliceOffice;
  * → Main вызывает: AgentLauncher("bayesian_agent.Loader", "-t", "-1,-1,-1,-1,-1,-1", ...)
  *
  * AbstractLoader связывает каждый тип агента с реализацией тактики.
- * Центры управления (Centre/Station/Office) используют заглушки —
+ * Центры управления (Centre/Station/Office) используют заглушки -
  * их логика не влияет на результат симуляции в базовых сценариях.
  */
 public class Loader extends AbstractLoader {

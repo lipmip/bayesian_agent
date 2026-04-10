@@ -10,9 +10,9 @@ import adf.core.agent.precompute.PrecomputeData;
 
 /**
  * Заглушка центра управления TacticsPoliceOffice.
- * TacticsCenter.think() возвращает void — центры не планируют действия,
+ * TacticsCenter.think() возвращает void - центры не планируют действия,
  * а только координируют полевых агентов через CommandPicker.
- * Нет метода precompute() — только resume() и preparate().
+ * Нет метода precompute() - только resume() и preparate().
  */
 public class TacticsPoliceOffice
         extends adf.core.component.tactics.TacticsPoliceOffice {

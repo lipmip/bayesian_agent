@@ -37,9 +37,9 @@ public class PoliceForcePolicySelector {
                 if (b instanceof rescuecore2.standard.entities.Blockade) {
                     rescuecore2.standard.entities.Blockade bl =
                         (rescuecore2.standard.entities.Blockade) b;
-
-                    // Проверяем зависание — тот же завал и стоимость не падает
+                    // Проверяем зависание - тот же завал и стоимость не падает
                     int currentCost = bl.getRepairCost();
+
                     if (blockade.equals(lastBlockade) && currentCost >= lastRepairCost) {
                         stuckCount++;
                     } else {
@@ -48,11 +48,12 @@ public class PoliceForcePolicySelector {
                     lastBlockade = blockade;
                     lastRepairCost = currentCost;
 
-                    // Застряли — переходим к другой заблокированной дороге
+                    // Застряли - переходим к другой заблокированной дороге
                     if (stuckCount >= STUCK_THRESHOLD) {
                         stuckCount = 0;
                         lastBlockade = null;
                         lastRepairCost = Integer.MAX_VALUE;
+
                         // Ищем другую дорогу кроме текущей
                         EntityID nextRoad = pickOtherBlockedRoad(belief, agentPos);
                         if (nextRoad != null) {
@@ -66,7 +67,7 @@ public class PoliceForcePolicySelector {
                     double dist = Math.hypot(
                         bl.getX() - agentInfo.getX(),
                         bl.getY() - agentInfo.getY());
-                    if (dist < 3000) {
+                    if (dist < 7500) {
                         selectedAction = AgentAction.clear(blockade);
                         return;
                     } else {
@@ -87,11 +88,11 @@ public class PoliceForcePolicySelector {
         selectedAction = AgentAction.rest();
     }
 
-    // Добавить новый метод:
     private EntityID pickOtherBlockedRoad(Belief belief, EntityID currentRoad) {
         for (EntityID road : belief.blockedRoads) {
             if (!road.equals(currentRoad)) return road;
         }
+        
         return null;
     }
 
@@ -102,15 +103,18 @@ public class PoliceForcePolicySelector {
                 (rescuecore2.standard.entities.Road) entity;
             if (road.isBlockadesDefined() && !road.getBlockades().isEmpty()) {
                 EntityID bid = road.getBlockades().iterator().next();
+
                 // Диагностика
                 rescuecore2.standard.entities.StandardEntity b = worldInfo.getEntity(bid);
                 if (b instanceof rescuecore2.standard.entities.Blockade) {
                     rescuecore2.standard.entities.Blockade bl =
                         (rescuecore2.standard.entities.Blockade) b;
+
                     System.err.println("[DIAG] blockade x=" + bl.getX()
                         + " y=" + bl.getY()
                         + " repairCost=" + bl.getRepairCost());
                 }
+
                 return bid;
             }
         }
