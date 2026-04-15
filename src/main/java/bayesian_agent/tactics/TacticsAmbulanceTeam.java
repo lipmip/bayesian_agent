@@ -37,6 +37,7 @@ public class TacticsAmbulanceTeam
         pathPlanning         = mm.getModule("TacticsAmbulanceTeam.PathPlanning",
                                             "adf.impl.module.algorithm.DijkstraPathPlanning");
         policySelector       = new AmbulancePolicySelector(ai, wi, pathPlanning);
+        
         Logger.info(ai, "initialized");
     }
 
@@ -68,7 +69,16 @@ public class TacticsAmbulanceTeam
         beliefManager.update(observationProcessor.getObservation());
         for (Map.Entry<EntityID, Belief.VictimBelief> e : beliefManager.getBelief().victims.entrySet()) {
             Belief.VictimBelief vb = e.getValue();
-            Logger.info(ai, "victim=" + e.getKey() + " " + vb);
+            double entropy = 0;
+            double[] probs = {vb.pHealthy, vb.pInjured, vb.pCritical, vb.pDead};
+
+            for (double p : probs) {
+                if (p > 1e-9) entropy -= p * Math.log(p);
+            }
+
+            Logger.info(ai, "victim=" + e.getKey()
+                + " " + vb
+                + " H=" + String.format("%.3f", entropy));
         }
 
         policySelector.select(beliefManager.getBelief());

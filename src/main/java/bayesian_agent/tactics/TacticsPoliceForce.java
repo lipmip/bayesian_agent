@@ -63,6 +63,11 @@ public class TacticsPoliceForce extends adf.core.component.tactics.TacticsPolice
         ChangeSet cs = ai.getChanged();
 
         observationProcessor.process(cs);
+
+        Logger.info(ai, "pos=" + ai.getPosition()
+            + " victims=" + beliefManager.getBelief().victims.size()
+            + " blockedRoads=" + beliefManager.getBelief().blockedRoads.size());
+
         beliefManager.update(observationProcessor.getObservation());
         policySelector.select(beliefManager.getBelief());
         Action action = actionExecutor.translate(policySelector.getSelectedAction());

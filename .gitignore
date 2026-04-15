@@ -6,7 +6,13 @@ build/
 .vscode/
 .idea/
 *.iml
+.agents/
+.claude/
+skills-lock.json
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Test
+logs/

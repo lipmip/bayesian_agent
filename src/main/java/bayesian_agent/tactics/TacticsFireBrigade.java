@@ -10,11 +10,14 @@ import adf.core.agent.module.ModuleManager;
 import adf.core.agent.precompute.PrecomputeData;
 import adf.core.component.module.algorithm.PathPlanning;
 import bayesian_agent.action.ActionExecutor;
+import bayesian_agent.module.belief.Belief;
 import bayesian_agent.module.belief.BeliefManager;
 import bayesian_agent.module.observation.ObservationProcessor;
 import bayesian_agent.module.policy.fire.FireBrigadePolicySelector;
 import bayesian_agent.util.Logger;
 import rescuecore2.worldmodel.ChangeSet;
+import rescuecore2.worldmodel.EntityID;
+import java.util.Map;
 
 public class TacticsFireBrigade extends adf.core.component.tactics.TacticsFireBrigade {
 
@@ -62,9 +65,15 @@ public class TacticsFireBrigade extends adf.core.component.tactics.TacticsFireBr
         observationProcessor.process(cs);
 
         beliefManager.update(observationProcessor.getObservation());
+
+        for (Map.Entry<EntityID, Belief.VictimBelief> e : beliefManager.getBelief().victims.entrySet()) {
+            Logger.info(ai, "victim=" + e.getKey() + " " + e.getValue());
+        }
+        
         policySelector.select(beliefManager.getBelief());
         Action action = actionExecutor.translate(policySelector.getSelectedAction());
 
+        Logger.info(ai, "obs=" + observationProcessor.getObservation() + " belief=" + beliefManager.getBelief());
         Logger.info(ai, "action=" + policySelector.getSelectedAction());
 
         return action;

@@ -45,6 +45,17 @@ public class FireBrigadePolicySelector {
     }
 
     public void select(Belief belief) {
+        // FireBrigade - единственный тип агента, который может выполнять AKRescue.
+        // Приоритет: сначала спасаем погребённых жертв, потом тушим.
+        EntityID buriedVictim = pickBestBuriedVictim(belief);
+        if (buriedVictim != null) {
+            AgentAction rescueAction = buildRescueOrMoveToVictim(buriedVictim);
+            if (rescueAction != null) {
+                selectedAction = rescueAction;
+                return;
+            }
+        }
+
         EntityID nearby = findBurningInRange(belief);
         if (nearby != null) {
             selectedAction = AgentAction.extinguish(nearby);
@@ -58,6 +69,52 @@ public class FireBrigadePolicySelector {
         }
 
         selectedAction = buildSearchMove();
+    }
+
+    private EntityID pickBestBuriedVictim(Belief belief) {
+        EntityID best = null;
+        double bestScore = -1.0;
+
+        for (Map.Entry<EntityID, Belief.VictimBelief> e : belief.victims.entrySet()) {
+            Belief.VictimBelief vb = e.getValue();
+            if (!vb.likelyBuried || vb.pAlive() < 0.01) continue;
+
+            double score = (vb.pCritical * 2.0 + vb.pInjured + vb.pHealthy) * vb.pAlive();
+            if (score > bestScore) {
+                bestScore = score;
+                best = e.getKey();
+            }
+        }
+
+        return best;
+    }
+
+    private AgentAction buildRescueOrMoveToVictim(EntityID victimId) {
+        EntityID agentPos = agentInfo.getPosition();
+        if (agentPos == null) return null;
+
+        StandardEntity ve = worldInfo.getEntity(victimId);
+        EntityID victimPos = null;
+        if (ve instanceof Human) {
+            EntityID pos = ((Human) ve).getPosition();
+            if (pos != null && worldInfo.getEntity(pos) instanceof Area) {
+                victimPos = pos;
+            }
+        }
+        if (victimPos == null) return null;
+
+        if (agentPos.equals(victimPos)) {
+            return AgentAction.rescue(victimId);
+        }
+
+        List<EntityID> path = pathPlanning
+            .setFrom(agentPos)
+            .setDestination(victimPos)
+            .calc()
+            .getResult();
+        if (path != null && !path.isEmpty()) return AgentAction.move(path);
+
+        return null;
     }
 
     // Ищет горящее здание рядом с позицией агента
@@ -88,11 +145,13 @@ public class FireBrigadePolicySelector {
         if (e instanceof rescuecore2.standard.entities.Area) {
             List<EntityID> neighbours = 
                 ((rescuecore2.standard.entities.Area) e).getNeighbours();
+
             if (!neighbours.isEmpty()) {
                 EntityID next = neighbours.get(
                     (int)(Math.random() * neighbours.size()));
                 List<EntityID> path = pathPlanning
                     .setFrom(pos).setDestination(next).calc().getResult();
+                    
                 if (path != null && !path.isEmpty()) 
                     return AgentAction.move(path);
             }

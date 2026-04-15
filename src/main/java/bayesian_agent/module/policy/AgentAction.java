@@ -20,7 +20,7 @@ public class AgentAction {
     public enum Type {
         MOVE,           // Двигаться по маршруту                [все]
         MOVE_TO_POINT,  // Двигаться к координатам (не через PathPlanning)
-        RESCUE,         // Извлечь погребённую жертву           [AmbulanceTeam]
+        RESCUE,         // Извлечь погребённую жертву           [FireBrigade only - AKRescue]
         LOAD,           // Загрузить жертву в машину            [AmbulanceTeam]
         UNLOAD,         // Выгрузить жертву в убежище           [AmbulanceTeam]
         EXTINGUISH,     // Тушить горящее здание                [FireBrigade]
@@ -39,10 +39,10 @@ public class AgentAction {
         return a;
     }
 
-    /** Для MOVE: список waypoints (EntityID дорог / зданий). */
+    /** Для MOVE: список waypoints (EntityID дорог / зданий) */
     public final List<EntityID> path;
 
-    /** Для RESCUE / LOAD / EXTINGUISH / CLEAR: EntityID цели. */
+    /** Для RESCUE / LOAD / EXTINGUISH / CLEAR: EntityID цели */
     public final EntityID targetId;
 
     // Фабричные методы 
