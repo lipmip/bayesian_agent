@@ -21,6 +21,8 @@ public class Observation {
     public final Set<EntityID> burningBuildings                 = new HashSet<>();
     public final Map<EntityID, FireIntensity> fireIntensity     = new LinkedHashMap<>();
     public final Set<EntityID> extinguishedBuildings            = new HashSet<>();
+    // FI: сырое значение fieryness [0..8] для заполнения buildingFireIntensity в Belief
+    public final Map<EntityID, Integer> buildingFireIntensityObs = new LinkedHashMap<>();
 
     // PoliceForce
     public final Set<EntityID> blockedRoads = new HashSet<>();

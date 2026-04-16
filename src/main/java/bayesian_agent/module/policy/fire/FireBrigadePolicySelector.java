@@ -47,6 +47,19 @@ public class FireBrigadePolicySelector {
     public void select(Belief belief) {
         // FireBrigade - единственный тип агента, который может выполнять AKRescue.
         // Приоритет: сначала спасаем погребённых жертв, потом тушим.
+
+        // Opportunistic rescue: если рядом погребённая живая жертва - спасаем немедленно,
+        // не дожидаясь пока injCrit поднимется. Не давать HEALTHY жертвам умереть под
+        // завалом пока FireBrigade ждёт порога.
+        EntityID nearbyBuried = findBuriedVictimAtCurrentLocation(belief);
+        if (nearbyBuried != null) {
+            selectedAction = AgentAction.rescue(nearbyBuried);
+            return;
+        }
+
+        // Navigation: идти к наиболее критической погребённой жертве.
+        // injCrit>0.3 используется только для выбора цели навигации - не блокирует
+        // rescue когда уже рядом (см. opportunistic выше).
         EntityID buriedVictim = pickBestBuriedVictim(belief);
         if (buriedVictim != null) {
             AgentAction rescueAction = buildRescueOrMoveToVictim(buriedVictim);
@@ -71,15 +84,40 @@ public class FireBrigadePolicySelector {
         selectedAction = buildSearchMove();
     }
 
+    /**
+     * Возвращает EntityID погребённой живой жертвы на текущей позиции FireBrigade.
+     * Порог injCrit не применяется - если мы уже рядом, спасаем немедленно.
+     */
+    private EntityID findBuriedVictimAtCurrentLocation(Belief belief) {
+        EntityID pos = agentInfo.getPosition();
+        if (pos == null) return null;
+
+        for (Map.Entry<EntityID, Belief.VictimBelief> e : belief.victims.entrySet()) {
+            Belief.VictimBelief vb = e.getValue();
+            if (!vb.likelyBuried || vb.pAlive() < 0.01) continue;
+
+            StandardEntity ve = worldInfo.getEntity(e.getKey());
+            if (!(ve instanceof Human)) continue;
+            EntityID victimPos = ((Human) ve).getPosition();
+            if (pos.equals(victimPos)) return e.getKey();
+        }
+        return null;
+    }
+
     private EntityID pickBestBuriedVictim(Belief belief) {
         EntityID best = null;
         double bestScore = -1.0;
 
         for (Map.Entry<EntityID, Belief.VictimBelief> e : belief.victims.entrySet()) {
             Belief.VictimBelief vb = e.getValue();
-            if (!vb.likelyBuried || vb.pAlive() < 0.01) continue;
+            // Пороги для навигации: b(VB=Buried)>0.5 AND injCrit>0.3
+            // (rescue при нахождении рядом - см. findBuriedVictimAtCurrentLocation)
+            if (!vb.likelyBuried) continue;
+            if (vb.pAlive() < 0.01) continue;
+            double injCrit = vb.pInjured + vb.pCritical;
+            if (injCrit < 0.3) continue;
 
-            double score = (vb.pCritical * 2.0 + vb.pInjured + vb.pHealthy) * vb.pAlive();
+            double score = (vb.pCritical * 2.0 + vb.pInjured) * vb.pAlive();
             if (score > bestScore) {
                 bestScore = score;
                 best = e.getKey();

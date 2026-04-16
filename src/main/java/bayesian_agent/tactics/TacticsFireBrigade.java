@@ -17,6 +17,7 @@ import bayesian_agent.module.policy.fire.FireBrigadePolicySelector;
 import bayesian_agent.util.Logger;
 import rescuecore2.worldmodel.ChangeSet;
 import rescuecore2.worldmodel.EntityID;
+import java.util.Locale;
 import java.util.Map;
 
 public class TacticsFireBrigade extends adf.core.component.tactics.TacticsFireBrigade {
@@ -65,15 +66,29 @@ public class TacticsFireBrigade extends adf.core.component.tactics.TacticsFireBr
         observationProcessor.process(cs);
 
         beliefManager.update(observationProcessor.getObservation());
+        Belief belief = beliefManager.getBelief();
 
-        for (Map.Entry<EntityID, Belief.VictimBelief> e : beliefManager.getBelief().victims.entrySet()) {
-            Logger.info(ai, "victim=" + e.getKey() + " " + e.getValue());
+        // Per-victim entropy - debug-режим
+        for (Map.Entry<EntityID, Belief.VictimBelief> e : belief.victims.entrySet()) {
+            Belief.VictimBelief vb = e.getValue();
+            double entropy = 0;
+            double[] probs = {vb.pHealthy, vb.pInjured, vb.pCritical, vb.pDead};
+            for (double p : probs) if (p > 1e-9) entropy -= p * Math.log(p);
+            Logger.debug(ai, "victim=" + e.getKey() + " " + vb
+                + " H=" + String.format(Locale.US, "%.3f", entropy));
         }
-        
-        policySelector.select(beliefManager.getBelief());
+
+        if (ai.getTime() % 50 == 0) {
+            Logger.info(ai, "[FIRE_METRICS] t=" + ai.getTime()
+                + " burning=" + belief.burningBuildings.size()
+                + " fireIntensityKnown=" + belief.buildingFireIntensity.size()
+                + " victims_tracked=" + belief.victims.size());
+        }
+
+        policySelector.select(belief);
         Action action = actionExecutor.translate(policySelector.getSelectedAction());
 
-        Logger.info(ai, "obs=" + observationProcessor.getObservation() + " belief=" + beliefManager.getBelief());
+        Logger.info(ai, "obs=" + observationProcessor.getObservation() + " belief=" + belief);
         Logger.info(ai, "action=" + policySelector.getSelectedAction());
 
         return action;

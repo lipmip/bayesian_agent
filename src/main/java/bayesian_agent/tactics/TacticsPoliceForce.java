@@ -10,6 +10,7 @@ import adf.core.agent.module.ModuleManager;
 import adf.core.agent.precompute.PrecomputeData;
 import adf.core.component.module.algorithm.PathPlanning;
 import bayesian_agent.action.ActionExecutor;
+import bayesian_agent.module.belief.Belief;
 import bayesian_agent.module.belief.BeliefManager;
 import bayesian_agent.module.observation.ObservationProcessor;
 import bayesian_agent.module.policy.police.PoliceForcePolicySelector;
@@ -58,21 +59,24 @@ public class TacticsPoliceForce extends adf.core.component.tactics.TacticsPolice
     public Action think(AgentInfo ai, WorldInfo wi, ScenarioInfo si,
                         ModuleManager mm, MessageManager msg, DevelopData dd) {
         Logger.info(ai, "tick " + ai.getTime());
-        Logger.info(ai, "pos=" + ai.getPosition() + " x=" + ai.getX() + " y=" + ai.getY());  // ← добавить
-        
+
         ChangeSet cs = ai.getChanged();
-
         observationProcessor.process(cs);
-
-        Logger.info(ai, "pos=" + ai.getPosition()
-            + " victims=" + beliefManager.getBelief().victims.size()
-            + " blockedRoads=" + beliefManager.getBelief().blockedRoads.size());
-
         beliefManager.update(observationProcessor.getObservation());
-        policySelector.select(beliefManager.getBelief());
+
+        Belief belief = beliefManager.getBelief();
+
+        if (ai.getTime() % 50 == 0) {
+            Logger.info(ai, "[POLICE_METRICS] t=" + ai.getTime()
+                + " blocked=" + belief.blockedRoads.size()
+                + " cleared=" + belief.clearedRoads.size()
+                + " blockades=" + belief.knownBlockadeIds.size());
+        }
+
+        policySelector.select(belief);
         Action action = actionExecutor.translate(policySelector.getSelectedAction());
 
-        Logger.info(ai, "obs=" + observationProcessor.getObservation() + " belief=" + beliefManager.getBelief());
+        Logger.info(ai, "obs=" + observationProcessor.getObservation() + " belief=" + belief);
         Logger.info(ai, "action=" + policySelector.getSelectedAction());
 
         return action;

@@ -5,6 +5,7 @@ import adf.core.agent.info.WorldInfo;
 import adf.core.component.module.algorithm.PathPlanning;
 import bayesian_agent.module.belief.Belief;
 import bayesian_agent.module.policy.AgentAction;
+import bayesian_agent.util.Logger;
 import rescuecore2.standard.entities.Area;
 import rescuecore2.standard.entities.Human;
 import rescuecore2.standard.entities.Refuge;
@@ -13,6 +14,10 @@ import rescuecore2.standard.entities.StandardEntityURN;
 import rescuecore2.worldmodel.EntityID;
 
 import java.util.*;
+
+enum AgentMacroState {
+    EXPLORE, NAVIGATE, WAIT_FOR_POLICE, RESCUE, TRANSPORT, DELIVER
+}
 
 /**
  * Выбор действия для агента-санитара: b_t → a_t.
@@ -24,6 +29,11 @@ public class AmbulancePolicySelector {
     private final WorldInfo worldInfo;
     private final PathPlanning pathPlanning;
     private AgentAction selectedAction = AgentAction.rest();
+
+    // FSM
+    private AgentMacroState macroState     = AgentMacroState.EXPLORE;
+    private AgentMacroState prevMacroState = AgentMacroState.EXPLORE;
+    private EntityID targetVictimId        = null;
 
     // Застревание при доставке жертвы
     private final Set<EntityID> failedRefuges = new HashSet<>();
@@ -40,10 +50,11 @@ public class AmbulancePolicySelector {
     }
 
     public void select(Belief belief) {
-        // Везём жертву - едем в убежище или выгружаем
+        EntityID pos = agentInfo.getPosition();
+
+        // Stuck detection для режима доставки
         if (agentInfo.someoneOnBoard() != null) {
-            EntityID curPos = agentInfo.getPosition();
-            if (curPos != null && curPos.equals(lastCarryPos)) {
+            if (pos != null && pos.equals(lastCarryPos)) {
                 carryStuckCount++;
                 if (carryStuckCount >= CARRY_STUCK_THRESHOLD && currentRefugeTarget != null) {
                     failedRefuges.add(currentRefugeTarget);
@@ -53,28 +64,101 @@ public class AmbulancePolicySelector {
             } else {
                 carryStuckCount = 0;
             }
-
-            lastCarryPos = curPos;
-            selectedAction = buildUnloadAction(belief);
-            return;
-        }
-        
-        // Не везём - сбрасываем состояние доставки
-        lastCarryPos = null;
-        carryStuckCount = 0;
-        failedRefuges.clear();
-        currentRefugeTarget = null;
-
-        // Есть известные живые жертвы
-        EntityID best = pickBestVictim(belief);
-        if (best != null) {
-            selectedAction = buildRescueOrMoveAction(best, belief);
-            return;
+            lastCarryPos = pos;
+        } else {
+            lastCarryPos = null;
+            carryStuckCount = 0;
+            failedRefuges.clear();
+            currentRefugeTarget = null;
         }
 
-        // Нечего делать
-        // TODO (Этап 2): Search - обход непосещённых зданий
-        selectedAction = buildSearchMove();
+        // Переходы FSM по порогам belief из ВКР
+        macroState = evaluateTransition(belief, pos);
+
+        // Лог только при смене состояния
+        if (macroState != prevMacroState) {
+            Logger.info(agentInfo, "[FSM] " + prevMacroState + "→" + macroState
+                + (targetVictimId != null ? " target=" + targetVictimId : ""));
+            prevMacroState = macroState;
+        }
+
+        switch (macroState) {
+            case EXPLORE         -> selectedAction = buildSearchMove();
+            case NAVIGATE        -> selectedAction = buildRescueOrMoveAction(targetVictimId, belief);
+            case WAIT_FOR_POLICE -> selectedAction = AgentAction.rest(); // этап 5: SAY/TELL
+            // Пробуем LOAD каждый тик: если FireBrigade только что освободил жертву
+            // (buriedness стало 0), LOAD сработает немедленно без потери тика.
+            // Если жертва ещё погребена - LOAD отклоняется симулятором тихо (= REST).
+            case RESCUE          -> selectedAction = AgentAction.load(targetVictimId);
+            case TRANSPORT       -> {
+                if (agentInfo.someoneOnBoard() != null) {
+                    // Уже везём жертву → едем в убежище
+                    selectedAction = buildUnloadAction(belief);
+                } else {
+                    // T4: находимся у жертвы, !buried, injCrit > 0.3 → LOAD
+                    selectedAction = AgentAction.load(targetVictimId);
+                }
+            }
+            case DELIVER         -> selectedAction = AgentAction.unload();
+        }
+    }
+
+    private AgentMacroState evaluateTransition(Belief belief, EntityID pos) {
+        // Если несём жертву - сразу TRANSPORT
+        if (agentInfo.someoneOnBoard() != null) {
+            return AgentMacroState.TRANSPORT;
+        }
+
+        // Выбрать лучшую жертву
+        EntityID bestVictim = pickBestVictim(belief);
+        if (bestVictim == null) return AgentMacroState.EXPLORE;
+        targetVictimId = bestVictim;
+
+        Belief.VictimBelief tvb = belief.victims.get(targetVictimId);
+        if (tvb == null) return AgentMacroState.EXPLORE;
+
+        double injCrit = tvb.pInjured + tvb.pCritical;
+
+        // T6: b(VHP=Dead) > 0.8 → Explore
+        if (tvb.pDead > 0.8) return AgentMacroState.EXPLORE;
+
+        // Проверить доступность пути
+        boolean pathBlocked = isPathBlockedToVictim(belief, pos, targetVictimId);
+
+        // T5: b(PC=Blocked) > 0.75 AND injCrit > 0.4 → WaitForPolice
+        if (pathBlocked && injCrit > 0.4) return AgentMacroState.WAIT_FOR_POLICE;
+
+        // T3: atLocation AND b(VB=Buried)>0.5 AND injCrit>0.3 → Rescue
+        if (atVictimLocation(pos, targetVictimId) && tvb.likelyBuried && injCrit > 0.3)
+            return AgentMacroState.RESCUE;
+
+        // T4: atLocation AND b(VB=Free)>0.7 AND injCrit>0.3 → Transport (LOAD)
+        if (atVictimLocation(pos, targetVictimId) && !tvb.likelyBuried && injCrit > 0.3)
+            return AgentMacroState.TRANSPORT;
+
+        // Иначе: Navigate к жертве
+        return AgentMacroState.NAVIGATE;
+    }
+
+    private boolean atVictimLocation(EntityID agentPos, EntityID victimId) {
+        EntityID vPos = getEntityPosition(victimId);
+        return agentPos != null && agentPos.equals(vPos);
+    }
+
+    private boolean isPathBlockedToVictim(Belief belief, EntityID from, EntityID victimId) {
+        if (from == null || victimId == null) return false;
+
+        EntityID dest = getEntityPosition(victimId);
+        if (dest == null) return false;
+        List<EntityID> path = pathPlanning
+            .setFrom(from).setDestination(dest).calc().getResult();
+        if (path == null) return true;
+
+        for (EntityID step : path) {
+            Double prob = belief.roadBlockedProb.get(step);
+            if (prob != null && prob > 0.75) return true;
+        }
+        return false;
     }
 
     private EntityID pickBestVictim(Belief belief) {
@@ -225,5 +309,9 @@ public class AmbulancePolicySelector {
         return null;
     }
 
-    public AgentAction getSelectedAction() { return selectedAction; }
+    public AgentAction getSelectedAction()  { return selectedAction; }
+
+    public AgentMacroState getMacroState()  { return macroState; }
+    
+    public EntityID getTargetVictimId()     { return targetVictimId; }
 }

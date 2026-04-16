@@ -90,6 +90,7 @@ public class ObservationProcessor {
             currentObservation.burningBuildings.add(id);
             currentObservation.fireIntensity.put(id,
                     Observation.FireIntensity.from(building.getFieryness()));
+            currentObservation.buildingFireIntensityObs.put(id, building.getFieryness());
         }
         // Здание видно и не горит - значит потушено или никогда не горело
         if (building.isFierynessDefined() && building.getFieryness() == 0) {

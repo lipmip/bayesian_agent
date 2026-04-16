@@ -3,6 +3,7 @@ package bayesian_agent.module.belief;
 import bayesian_agent.module.observation.Observation;
 import rescuecore2.worldmodel.EntityID;
 import java.util.*;
+import java.util.Locale;
 
 /**
  * Убеждение агента b_t.
@@ -21,14 +22,25 @@ public class Belief {
     public final Set<EntityID> blockedRoads          = new HashSet<>();
     public final Set<EntityID> knownBlockadeIds      = new HashSet<>();
 
+    // PC: вероятность заблокированности дороги (1.0 = точно заблокирована из наблюдения)
+    public Map<EntityID, Double> roadBlockedProb = new HashMap<>();
+
+    // FI: интенсивность пожара по зданиям [0..8] (0 = нет пожара)
+    public Map<EntityID, Integer> buildingFireIntensity = new HashMap<>();
+
+    // Расчищенные дороги - для инициализации ParticleFilter в POMCP
+    public Set<EntityID> clearedRoads = new HashSet<>();
+
     public static class VictimBelief {
         public double  pHealthy           = 0.0;
         public double  pInjured           = 0.0;
         public double  pCritical          = 0.0;
         public double  pDead              = 0.0;
-        public int     lastKnownDamage    = 0;
-        public int     ticksSinceObserved = 0;
-        public boolean likelyBuried       = false;
+        public int     lastKnownDamage      = 0;
+        public int     ticksSinceObserved  = 0;
+        public boolean likelyBuried        = false;
+        // VDmg: оценка скорости убывания HP за тик
+        public int     estimatedDamageRate = 50; // default: Low
 
         public static VictimBelief fromObservation(Observation.VictimStatus s) {
             VictimBelief b = new VictimBelief();
@@ -45,8 +57,9 @@ public class Belief {
 
         @Override
         public String toString() {
-            return String.format("VB{alive=%.3f,crit=%.3f,dmg=%d,ticks=%d,buried=%b}",
-                    pAlive(), pCritical, lastKnownDamage, ticksSinceObserved, likelyBuried);
+            return String.format(Locale.US,
+                    "VB{alive=%.3f,inj=%.3f,crit=%.3f,dmg=%d,dmgRate=%d,ticks=%d,buried=%b}",
+                    pAlive(), pInjured, pCritical, lastKnownDamage, estimatedDamageRate, ticksSinceObserved, likelyBuried);
         }
     }
 
@@ -55,6 +68,9 @@ public class Belief {
         return "Belief{victims=" + victims.size()
                + ", burning=" + burningBuildings.size()
                + ", blockedRoads=" + blockedRoads.size()
+               + ", roadBlockedProb=" + roadBlockedProb.size()
+               + ", fireIntensity=" + buildingFireIntensity.size()
+               + ", clearedRoads=" + clearedRoads.size()
                + ", blockades=" + knownBlockadeIds.size() + "}";
     }
 }
