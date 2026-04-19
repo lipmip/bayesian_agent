@@ -20,7 +20,7 @@ public class AgentAction {
     public enum Type {
         MOVE,           // Двигаться по маршруту                [все]
         MOVE_TO_POINT,  // Двигаться к координатам (не через PathPlanning)
-        RESCUE,         // Извлечь погребённую жертву           [FireBrigade only - AKRescue]
+        RESCUE,         // Извлечь погребённую жертву (AKRescue)[AmbulanceTeam, FireBrigade]
         LOAD,           // Загрузить жертву в машину            [AmbulanceTeam]
         UNLOAD,         // Выгрузить жертву в убежище           [AmbulanceTeam]
         EXTINGUISH,     // Тушить горящее здание                [FireBrigade]

@@ -20,17 +20,15 @@ import rescuecore2.worldmodel.EntityID;
 import java.util.Collections;
 import java.util.List;
 
-/**
- * ШАГ 4 ТИКА: a_t → ADF Action.
- *
- * В новом ADF think() возвращает Action напрямую - agentInfo.act() удалён.
- * translate() публичный, вызывается из оркестратора через return.
- */
+// ШАГ 4 ТИКА: a_t → ADF Action
+// В новом ADF think() возвращает Action напрямую - agentInfo.act() удалён.
+// translate() публичный, вызывается из оркестратора через return
 public class ActionExecutor {
 
     private final AgentInfo    agentInfo;
     private final WorldInfo    worldInfo;
     private final ScenarioInfo scenarioInfo;
+
 
     public ActionExecutor(AgentInfo agentInfo, WorldInfo worldInfo,
                           ScenarioInfo scenarioInfo) {
@@ -39,9 +37,7 @@ public class ActionExecutor {
         this.scenarioInfo = scenarioInfo;
     }
 
-    /**
-     * Переводит внутреннее действие в ADF Action для возврата из think().
-     */
+    // Переводит внутреннее действие в ADF Action для возврата из think()
     public Action translate(AgentAction action) {
         switch (action.type) {
 
@@ -76,23 +72,21 @@ public class ActionExecutor {
                 StandardEntity blockadeEntity = worldInfo.getEntity(action.targetId);
                 if (blockadeEntity instanceof Blockade) {
                     Blockade blockade = (Blockade) blockadeEntity;
-                    // AKClearArea: координаты точки куда агент направляет очиститель.
-                    // Используем координаты агента + вектор к центру завала,
-                    // но ограниченный радиусом clearRepairDistance.
-                    int agentX = (int) agentInfo.getX();
-                    int agentY = (int) agentInfo.getY();
-                    int bx = blockade.getX();
-                    int by = blockade.getY();
-                    double dist = Math.hypot(bx - agentX, by - agentY);
+                    int agentX    = (int) agentInfo.getX();
+                    int agentY    = (int) agentInfo.getY();
                     int clearDist = scenarioInfo.getClearRepairDistance();
-                    int targetX, targetY;
-                    if (dist <= clearDist) {
-                        targetX = bx;
-                        targetY = by;
-                    } else {
-                        // Нормализуем вектор до clearRepairDistance
-                        targetX = agentX + (int)((bx - agentX) * clearDist / dist);
-                        targetY = agentY + (int)((by - agentY) * clearDist / dist);
+
+                    // Цель AKClearArea = центроид завала (getX/getY = среднее оставшихся тайлов).
+                    // Центроид обновляется симулятором по мере расчистки → всегда указывает
+                    // на оставшийся кластер тайлов. Дальний-апекс подход давал clearing freeze:
+                    // после сдвига агента на север дальний апекс оказывался в уже расчищенной зоне.
+                    int targetX = blockade.getX();
+                    int targetY = blockade.getY();
+                    double distToCent = Math.hypot(targetX - agentX, targetY - agentY);
+                    if (distToCent > clearDist && distToCent >= 1.0) {
+                        double scale = (double) clearDist / distToCent;
+                        targetX = agentX + (int)((targetX - agentX) * scale);
+                        targetY = agentY + (int)((targetY - agentY) * scale);
                     }
                     return new ActionClear(targetX, targetY, blockade);
                 }

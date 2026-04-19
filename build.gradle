@@ -55,5 +55,8 @@ task launch(type: JavaExec) {
     if (project.hasProperty('args')) {
         args project.property('args').split(' ')
     }
+    if (project.hasProperty('bayesian.debug')) {
+        jvmArgs '-Dbayesian.debug=true'
+    }
     standardInput = System.in
 }

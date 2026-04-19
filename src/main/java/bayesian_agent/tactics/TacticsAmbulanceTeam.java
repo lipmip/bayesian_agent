@@ -13,7 +13,9 @@ import bayesian_agent.action.ActionExecutor;
 import bayesian_agent.module.belief.Belief;
 import bayesian_agent.module.belief.BeliefManager;
 import bayesian_agent.module.observation.ObservationProcessor;
+import bayesian_agent.module.policy.AgentAction;
 import bayesian_agent.module.policy.ambulance.AmbulancePolicySelector;
+import bayesian_agent.module.pomcp.POMCPPlanner;
 import bayesian_agent.util.Logger;
 import rescuecore2.worldmodel.ChangeSet;
 import rescuecore2.worldmodel.EntityID;
@@ -28,8 +30,12 @@ public class TacticsAmbulanceTeam
     private AmbulancePolicySelector policySelector;
     private ActionExecutor          actionExecutor;
     private PathPlanning            pathPlanning;
+    private POMCPPlanner            pomcpPlanner;
 
-    // Метрики для сравнения эвристика vs POMCP
+    // true = POMCP, false = эвристика  
+    private static final boolean USE_POMCP = true;
+
+    // Метрики для сравнения эвристики vs POMCP
     private int victimsDelivered   = 0;
     private int victimsLost        = 0;
     private int totalDeliveryTicks = 0;
@@ -45,8 +51,9 @@ public class TacticsAmbulanceTeam
         pathPlanning         = mm.getModule("TacticsAmbulanceTeam.PathPlanning",
                                             "adf.impl.module.algorithm.DijkstraPathPlanning");
         policySelector       = new AmbulancePolicySelector(ai, wi, pathPlanning);
-        
-        Logger.info(ai, "initialized");
+        pomcpPlanner         = new POMCPPlanner(ai, wi, pathPlanning);
+
+        Logger.info(ai, "initialized mode=" + (USE_POMCP ? "POMCP" : "heuristic"));
     }
 
     @Override
@@ -69,77 +76,107 @@ public class TacticsAmbulanceTeam
     @Override
     public Action think(AgentInfo ai, WorldInfo wi, ScenarioInfo si,
                         ModuleManager mm, MessageManager msg, DevelopData dd) {
-        Logger.info(ai, "tick " + ai.getTime());
+        Logger.debug(ai, "tick " + ai.getTime());
 
         ChangeSet cs = ai.getChanged();
         observationProcessor.process(cs);
-
         beliefManager.update(observationProcessor.getObservation());
 
-        // Per-victim entropy - только в debug-режиме (verbose)
         Belief belief = beliefManager.getBelief();
-        for (Map.Entry<EntityID, Belief.VictimBelief> e : belief.victims.entrySet()) {
-            Belief.VictimBelief vb = e.getValue();
-            double entropy = 0;
-            double[] probs = {vb.pHealthy, vb.pInjured, vb.pCritical, vb.pDead};
-            for (double p : probs) {
-                if (p > 1e-9) entropy -= p * Math.log(p);
+
+        // Per-victim entropy - только в debug-режиме
+        if (Logger.DEBUG) {
+            for (Map.Entry<EntityID, Belief.VictimBelief> e : belief.victims.entrySet()) {
+                Belief.VictimBelief vb = e.getValue();
+                double h = 0;
+                for (double p : new double[]{vb.pHealthy, vb.pInjured, vb.pCritical, vb.pDead})
+                    if (p > 1e-9) h -= p * Math.log(p);
+                Logger.debug(ai, "victim=" + e.getKey() + " " + vb
+                    + " H=" + String.format(Locale.US, "%.3f", h));
             }
-            Logger.debug(ai, "victim=" + e.getKey()
-                + " " + vb
-                + " H=" + String.format(Locale.US, "%.3f", entropy));
+            Logger.debug(ai, "obs=" + observationProcessor.getObservation()
+                + " belief=" + belief);
         }
 
-        // Компактный снимок belief для post-analysis (POMCP, сравнение методов)
+        // Компактный снимок belief каждые 25 тиков
         if (ai.getTime() % 25 == 0) {
-            int n = belief.victims.size();
-            double sumPCrit = 0, sumH = 0;
-            for (Belief.VictimBelief vb : belief.victims.values()) {
-                sumPCrit += vb.pCritical;
-                double[] ps = {vb.pHealthy, vb.pInjured, vb.pCritical, vb.pDead};
-                for (double p : ps) if (p > 1e-9) sumH -= p * Math.log(p);
-            }
-            Logger.info(ai, "[BELIEF_SNAP] t=" + ai.getTime()
-                + " victims=" + n
-                + " avg_pCrit=" + String.format(Locale.US, "%.3f", n > 0 ? sumPCrit / n : 0)
-                + " avg_H=" + String.format(Locale.US, "%.3f", n > 0 ? sumH / n : 0)
-                + " blocked=" + belief.blockedRoads.size()
-                + " burning=" + belief.burningBuildings.size());
+            logBeliefSnap(ai, belief);
         }
 
-        policySelector.select(belief);
-        bayesian_agent.module.policy.AgentAction selectedAction = policySelector.getSelectedAction();
+        // Выбор действия
+        AgentAction selectedAction;
+        if (USE_POMCP) {
+            selectedAction = pomcpPlanner.selectAction(
+                belief, observationProcessor.getObservation());
+        } else {
+            policySelector.select(belief);
+            selectedAction = policySelector.getSelectedAction();
+            Logger.info(ai, "[STATE] t=" + ai.getTime()
+                + " macro=" + policySelector.getMacroState()
+                + " action=" + selectedAction.type
+                + " target=" + policySelector.getTargetVictimId());
+        }
 
-        // Трекинг метрик
-        if (selectedAction.type == bayesian_agent.module.policy.AgentAction.Type.LOAD) {
+        // Метрики
+        if (selectedAction.type == AgentAction.Type.LOAD) {
             loadTick = ai.getTime();
         }
-        if (selectedAction.type == bayesian_agent.module.policy.AgentAction.Type.UNLOAD
+        if (selectedAction.type == AgentAction.Type.UNLOAD
                 && ai.someoneOnBoard() != null && loadTick >= 0) {
             victimsDelivered++;
-            totalDeliveryTicks += ai.getTime() - loadTick;
+            int tripTicks = ai.getTime() - loadTick;
+            totalDeliveryTicks += tripTicks;
             deliveryCount++;
+            Logger.info(ai, "[DELIVERY] t=" + ai.getTime()
+                + " victim_delivered tripTicks=" + tripTicks
+                + " total=" + victimsDelivered);
             loadTick = -1;
         }
-        if (ai.getTime() % 50 == 0) {
-            // victimsLost = удалены из belief как мёртвые, кроме доставленных
-            victimsLost = Math.max(0, beliefManager.getVictimsRemovedAsDead() - victimsDelivered);
-            double avg = deliveryCount > 0 ? (double) totalDeliveryTicks / deliveryCount : 0;
-            Logger.info(ai, "[METRICS] t=" + ai.getTime()
-                + " delivered=" + victimsDelivered
-                + " lost=" + victimsLost
-                + " avgTicks=" + String.format(Locale.US, "%.1f", avg)
-                + " state=" + policySelector.getMacroState());
+
+        int t = ai.getTime();
+        int maxT = -1;
+        try { maxT = si.getKernelTimesteps(); } catch (Exception ignored) {}
+        if (t % 50 == 0 || (maxT > 0 && t == maxT)) {
+            logMetrics(ai, si, belief, t);
         }
 
-        Logger.info(ai, "[STATE] macro=" + policySelector.getMacroState()
-            + " target=" + policySelector.getTargetVictimId());
+        Logger.debug(ai, "action=" + selectedAction);
+        return actionExecutor.translate(selectedAction);
+    }
 
-        Action action = actionExecutor.translate(selectedAction);
+    private void logBeliefSnap(AgentInfo ai, Belief belief) {
+        int n = belief.victims.size();
+        double sumPCrit = 0, sumH = 0, topScore = 0;
+        EntityID topId = null;
+        for (Map.Entry<EntityID, Belief.VictimBelief> e : belief.victims.entrySet()) {
+            Belief.VictimBelief vb = e.getValue();
+            sumPCrit += vb.pCritical;
+            for (double p : new double[]{vb.pHealthy, vb.pInjured, vb.pCritical, vb.pDead})
+                if (p > 1e-9) sumH -= p * Math.log(p);
+            double sc = (vb.pCritical * 2.0 + vb.pInjured) * vb.pAlive();
+            if (sc > topScore) { topScore = sc; topId = e.getKey(); }
+        }
+        Logger.info(ai, "[BELIEF_SNAP] t=" + ai.getTime()
+            + " victims=" + n
+            + " avg_pCrit=" + String.format(Locale.US, "%.3f", n > 0 ? sumPCrit / n : 0)
+            + " avg_H=" + String.format(Locale.US, "%.3f", n > 0 ? sumH / n : 0)
+            + " blocked=" + belief.blockedRoads.size()
+            + " burning=" + belief.burningBuildings.size()
+            + " top=" + topId
+            + " topScore=" + String.format(Locale.US, "%.3f", topScore));
+    }
 
-        Logger.info(ai, "obs=" + observationProcessor.getObservation() + " belief=" + beliefManager.getBelief());
-        Logger.info(ai, "action=" + selectedAction);
-
-        return action;
+    private void logMetrics(AgentInfo ai, ScenarioInfo si, Belief belief, int t) {
+        victimsLost = Math.max(0, beliefManager.getVictimsRemovedAsDead() - victimsDelivered);
+        double avg = deliveryCount > 0 ? (double) totalDeliveryTicks / deliveryCount : 0;
+        int maxT2 = -1;
+        try { maxT2 = si.getKernelTimesteps(); } catch (Exception ignored) {}
+        boolean isFinal = maxT2 > 0 && t == maxT2;
+        Logger.info(ai, "[METRICS" + (isFinal ? "_FINAL" : "") + "] t=" + t
+            + " delivered=" + victimsDelivered
+            + " lost=" + victimsLost
+            + " inBelief=" + belief.victims.size()
+            + " avgTripTicks=" + String.format(Locale.US, "%.1f", avg)
+            + " mode=" + (USE_POMCP ? "POMCP" : "heuristic"));
     }
 }
