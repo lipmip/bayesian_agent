@@ -34,8 +34,9 @@ public class PoliceForcePolicySelector {
     private final Map<EntityID, Integer> unreachableUntil = new HashMap<>();
 
     // Детектор stuck при движении к целевой дороге
-    private double lastX = Double.NaN, lastY = Double.NaN;
-    private int    moveStuckCount  = 0;
+    private double  lastX = Double.NaN, lastY = Double.NaN;
+    private int     moveStuckCount   = 0;
+    private boolean prevActionWasMove = false;   // не считать stuck во время CLEAR/REST
     private static final int MOVE_STUCK_THRESHOLD = 4;
 
     // Детектор stuck при расчистке (repairCost не меняется)
@@ -62,6 +63,7 @@ public class PoliceForcePolicySelector {
         // В ЗДАНИИ: выйти 
         if (pos != null && worldInfo.getEntity(pos) instanceof Building) {
             selectedAction = buildExitBuilding(pos);
+            prevActionWasMove = selectedAction.type == AgentAction.Type.MOVE;
             Logger.info(agentInfo, "[PF] in_building=" + pos + " → " + selectedAction.type);
             return;
         }
@@ -99,12 +101,14 @@ public class PoliceForcePolicySelector {
                         clearStuckCount = 0;
                         lastRepairCost  = Integer.MAX_VALUE;
                         int[] ap = nearestApex(bl, agentX, agentY);
+                        prevActionWasMove = true;
                         selectedAction = AgentAction.moveToPoint(ap[0], ap[1]);
                         return;
                     }
 
                     // CLEAR: ActionExecutor сам масштабирует таргет к центроиду
                     // в пределах clearRepairDistance. Никаких проверок дистанции здесь.
+                    prevActionWasMove = false;
                     selectedAction = AgentAction.clear(blockade);
                     return;
                 }
@@ -114,6 +118,23 @@ public class PoliceForcePolicySelector {
             clearStuckCount = 0;
             lastRepairCost  = Integer.MAX_VALUE;
             committedRoad   = null;
+        }
+
+        // CROSS-ROAD: завал на соседней дороге в радиусе расчистки - чистим не входя на неё
+        if (pos != null) {
+            EntityID nearbyBlockade = findNearbyBlockade(belief, pos);
+            if (nearbyBlockade != null) {
+                Blockade nbl = (Blockade) worldInfo.getEntity(nearbyBlockade);
+                int agentX = (int) agentInfo.getX(), agentY = (int) agentInfo.getY();
+                Logger.info(agentInfo, "[PF_CROSS_CLEAR] blockade=" + nearbyBlockade
+                    + " centroid=(" + nbl.getX() + "," + nbl.getY() + ")"
+                    + " dist=" + (int) Math.hypot(nbl.getX()-agentX, nbl.getY()-agentY)
+                    + " repairCost=" + nbl.getRepairCost());
+                moveStuckCount = 0; lastX = Double.NaN; lastY = Double.NaN;
+                prevActionWasMove = false;
+                selectedAction = AgentAction.clear(nearbyBlockade);
+                return;
+            }
         }
 
         // НЕ НА ЗАБЛОКИРОВАННОЙ ДОРОГЕ: двигаться к ближайшей
@@ -131,11 +152,11 @@ public class PoliceForcePolicySelector {
         }
 
         if (committedRoad != null) {
-            // Stuck-детектор движения
+            // Stuck-детектор движения - только когда прошлое действие было MOVE
             double cx = agentInfo.getX(), cy = agentInfo.getY();
-            if (!Double.isNaN(lastX) && Math.hypot(cx - lastX, cy - lastY) < 500) {
+            if (prevActionWasMove && !Double.isNaN(lastX) && Math.hypot(cx - lastX, cy - lastY) < 500) {
                 moveStuckCount++;
-            } else {
+            } else if (prevActionWasMove) {
                 moveStuckCount = 0;
             }
             lastX = cx; lastY = cy;
@@ -158,6 +179,7 @@ public class PoliceForcePolicySelector {
                     .setFrom(pos).setDestination(committedRoad).calc().getResult();
                 if (path != null && !path.isEmpty()) {
                     Logger.info(agentInfo, "[PF] MOVE → road=" + committedRoad + " pathLen=" + path.size());
+                    prevActionWasMove = true;
                     selectedAction = AgentAction.move(path);
                     return;
                 }
@@ -170,10 +192,11 @@ public class PoliceForcePolicySelector {
         }
 
         Logger.info(agentInfo, "[PF] nothing to do → REST");
+        prevActionWasMove = false;
         selectedAction = AgentAction.rest();
     }
 
-    // ─── вспомогательные ────────────────────────────────────────────────────
+    // вспомогательные 
 
     private AgentAction buildExitBuilding(EntityID buildingId) {
         StandardEntity e = worldInfo.getEntity(buildingId);
@@ -186,7 +209,7 @@ public class PoliceForcePolicySelector {
         return AgentAction.rest();
     }
 
-    /** Выбрать лучшую заблокированную дорогу: сначала на пути к жертвам, иначе ближайшая */
+    // Выбрать лучшую заблокированную дорогу: сначала на пути к жертвам, иначе ближайшая 
     private EntityID pickBestBlockedRoad(Belief belief, EntityID from) {
         if (from == null || belief.blockedRoads.isEmpty()) return null;
 
@@ -199,9 +222,11 @@ public class PoliceForcePolicySelector {
         int bestLen = Integer.MAX_VALUE;
         List<EntityID> candidates = new ArrayList<>(belief.blockedRoads);
         candidates.removeIf(r -> unreachableRoads.contains(r));
+        
         // детерминировано распределяем агентов по разным дорогам
         candidates.sort(Comparator.comparingInt(EntityID::getValue));
         int offset = Math.abs(agentInfo.getID().getValue()) % Math.max(1, candidates.size());
+        
         // пробуем от смещения по кругу
         for (int i = 0; i < candidates.size(); i++) {
             EntityID road = candidates.get((offset + i) % candidates.size());
@@ -255,7 +280,7 @@ public class PoliceForcePolicySelector {
         return blockades.get(idx);
     }
 
-    /** Ближайший апекс завала к агенту (физически доступный край полигона) */
+    // Ближайший апекс завала к агенту (физически доступный край полигона) 
     private int[] nearestApex(Blockade bl, int agentX, int agentY) {
         int nearX = bl.getX(), nearY = bl.getY();
         double nearDist = Math.hypot(nearX - agentX, nearY - agentY);
@@ -268,6 +293,35 @@ public class PoliceForcePolicySelector {
             }
         }
         return new int[]{nearX, nearY};
+    }
+
+    //  Ищет завал на соседней заблокированной дороге в радиусе clearRepairDistance
+    //  Возвращает EntityID завала, который можно расчистить с текущей позиции без входа на ту дорогу. 
+    private EntityID findNearbyBlockade(Belief belief, EntityID currentPos) {
+        int agentX  = (int) agentInfo.getX();
+        int agentY  = (int) agentInfo.getY();
+        int clearDist = scenarioInfo.getClearRepairDistance();
+
+        EntityID best     = null;
+        int      bestCost = 0;
+        for (EntityID roadId : belief.blockedRoads) {
+            if (roadId.equals(currentPos)) continue;
+            StandardEntity re = worldInfo.getEntity(roadId);
+            
+            if (!(re instanceof Road road)) continue;
+            if (!road.isBlockadesDefined() || road.getBlockades().isEmpty()) continue;
+            
+            for (EntityID blockadeId : road.getBlockades()) {
+                StandardEntity be = worldInfo.getEntity(blockadeId);
+                if (!(be instanceof Blockade bl)) continue;
+                double dist = Math.hypot(bl.getX() - agentX, bl.getY() - agentY);
+                if (dist <= clearDist && bl.getRepairCost() > bestCost) {
+                    bestCost = bl.getRepairCost();
+                    best = blockadeId;
+                }
+            }
+        }
+        return best;
     }
 
     public AgentAction getSelectedAction() { return selectedAction; }
