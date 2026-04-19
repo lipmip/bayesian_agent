@@ -121,16 +121,19 @@ public class TacticsAmbulanceTeam
         if (selectedAction.type == AgentAction.Type.LOAD) {
             loadTick = ai.getTime();
         }
-        if (selectedAction.type == AgentAction.Type.UNLOAD
-                && ai.someoneOnBoard() != null && loadTick >= 0) {
-            victimsDelivered++;
-            int tripTicks = ai.getTime() - loadTick;
-            totalDeliveryTicks += tripTicks;
-            deliveryCount++;
-            Logger.info(ai, "[DELIVERY] t=" + ai.getTime()
-                + " victim_delivered tripTicks=" + tripTicks
-                + " total=" + victimsDelivered);
-            loadTick = -1;
+        if (selectedAction.type == AgentAction.Type.UNLOAD && ai.someoneOnBoard() != null) {
+            // Удаляем жертву из belief сразу - не ждём обновления worldInfo
+            beliefManager.removeDeliveredVictim(ai.someoneOnBoard().getID());
+            if (loadTick >= 0) {
+                victimsDelivered++;
+                int tripTicks = ai.getTime() - loadTick;
+                totalDeliveryTicks += tripTicks;
+                deliveryCount++;
+                Logger.info(ai, "[DELIVERY] t=" + ai.getTime()
+                    + " victim_delivered tripTicks=" + tripTicks
+                    + " total=" + victimsDelivered);
+                loadTick = -1;
+            }
         }
 
         int t = ai.getTime();

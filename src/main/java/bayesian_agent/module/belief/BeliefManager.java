@@ -21,8 +21,11 @@ public class BeliefManager {
 
     private Belief currentBelief = new Belief();
 
-    /** Счётчик жертв, удалённых из belief как мёртвые (pDead > 0.99). */
+    // Счётчик жертв, удалённых из belief как мёртвые (pDead > 0.99)
     private int victimsRemovedAsDead = 0;
+
+    // ID жертв, уже доставленных в убежище - никогда не добавляем обратно в belief
+    private final java.util.Set<EntityID> deliveredVictims = new java.util.HashSet<>();
 
     public BeliefManager(AgentInfo agentInfo, WorldInfo worldInfo) {
         this.agentInfo = agentInfo;
@@ -50,22 +53,27 @@ public class BeliefManager {
         }
 
         // Удаляем фактически мёртвых жертв и логируем события
+        // Также удаляем жертв, которых worldInfo видит в убежище - они доставлены
         List<EntityID> toRemove = new ArrayList<>();
         for (Map.Entry<EntityID, Belief.VictimBelief> e : currentBelief.victims.entrySet()) {
             Belief.VictimBelief vb = e.getValue();
             if (vb.pDead > 0.99 && vb.ticksSinceObserved > 5) {
+                toRemove.add(e.getKey());
+            } else if (isAtRefuge(e.getKey())) {
+                Logger.info(agentInfo, "[BELIEF] -delivered id=" + e.getKey()
+                    + " (victim now at refuge)");
                 toRemove.add(e.getKey());
             }
         }
 
         for (EntityID id : toRemove) {
             Belief.VictimBelief vb = currentBelief.victims.get(id);
-
-            Logger.info(agentInfo, "[BELIEF] -dead id=" + id
-                + " ticks=" + vb.ticksSinceObserved
-                + " pDead=" + String.format(Locale.US, "%.3f", vb.pDead));
-
-            victimsRemovedAsDead++;
+            if (vb != null && vb.pDead > 0.99) {
+                Logger.info(agentInfo, "[BELIEF] -dead id=" + id
+                    + " ticks=" + vb.ticksSinceObserved
+                    + " pDead=" + String.format(Locale.US, "%.3f", vb.pDead));
+                victimsRemovedAsDead++;
+            }
             currentBelief.victims.remove(id);
         }
 
@@ -87,6 +95,10 @@ public class BeliefManager {
         // UPDATE - обновляем из наблюдений
         for (Map.Entry<EntityID, Observation.VictimStatus> e
                 : obs.victims.entrySet()) {
+            // Доставленная или находящаяся в убежище жертва - не добавляем обратно
+            if (deliveredVictims.contains(e.getKey())) continue;
+            if (isAtRefuge(e.getKey())) continue;
+
             boolean isNew = !currentBelief.victims.containsKey(e.getKey());
             Belief.VictimBelief vb = Belief.VictimBelief.fromObservation(e.getValue());
             // Сохраняем damage и estimatedDamageRate если доступен
@@ -144,10 +156,8 @@ public class BeliefManager {
         currentBelief.knownBlockadeIds.addAll(obs.blockadeIds);
     }
 
-    /**
-     * Predict-шаг: HP жертвы убывает на lastKnownDamage каждый тик.
-     * Сдвигаем вероятности вверх по шкале тяжести.
-     */
+    // Predict-шаг: HP жертвы убывает на lastKnownDamage каждый тик
+    // Сдвигаем вероятности вверх по шкале тяжести
     private void applyDamageDecay(Belief.VictimBelief vb) {
         double decayRate;
         if (vb.lastKnownDamage > 0) {
@@ -173,12 +183,21 @@ public class BeliefManager {
         return currentBelief;
     }
 
-    /** Число жертв, удалённых из belief по критерию pDead > 0.99. */
+    // Число жертв, удалённых из belief по критерию pDead > 0.99
     public int getVictimsRemovedAsDead() {
         return victimsRemovedAsDead;
     }
 
-    /** Возвращает true если жертва находится в убежище (доставлена, в безопасности). */
+    //  Явно удалить жертву из belief после успешной доставки в убежище (UNLOAD)
+    //  Добавляет в deliveredVictims - жертва никогда не будет добавлена обратно
+    public void removeDeliveredVictim(EntityID id) {
+        deliveredVictims.add(id);
+        if (currentBelief.victims.remove(id) != null) {
+            Logger.info(agentInfo, "[BELIEF] -delivered id=" + id + " (explicit after UNLOAD)");
+        }
+    }
+
+    // Возвращает true если жертва находится в убежище (доставлена, в безопасности)
     private boolean isAtRefuge(EntityID victimId) {
         StandardEntity entity = worldInfo.getEntity(victimId);
         if (!(entity instanceof Human)) return false;

@@ -28,9 +28,10 @@ public class POMCPPlanner {
     private final RewardFunction         rewardFn;
     private final StateMachineController sm;
 
-    private POMCPNode   root           = new POMCPNode();
-    private AgentAction lastAction     = null;
-    private boolean     lastWasForced  = false;
+    private POMCPNode        root          = new POMCPNode();
+    private AgentAction      lastAction    = null;
+    private AgentAction.Type lastBestType  = null;  // тип, выбранный POMCP (для advancement дерева)
+    private boolean          lastWasForced = false;
 
     public POMCPPlanner(AgentInfo ai, WorldInfo wi, PathPlanning pp) {
         this.agentInfo = ai;
@@ -47,7 +48,11 @@ public class POMCPPlanner {
         boolean treeReused;
         if (lastAction != null) {
             pf.update(lastAction, obs);
-            POMCPNode advanced = advanceTree(lastAction, obs);
+
+            // Переиспользуем поддерево по типу, который POMCP выбрал (не обязательно тому, что FSM исполнил)
+            // Частичный фильтр обновляется реальным действием (lastAction), дерево - намеренным (lastBestType)
+            AgentAction.Type advanceType = lastBestType != null ? lastBestType : lastAction.type;
+            POMCPNode advanced = advanceTree(advanceType, obs);
             treeReused = advanced.getTotalVisits() > 0;
             root = advanced;
         } else {
@@ -78,24 +83,32 @@ public class POMCPPlanner {
             + " target=" + sm.getTargetVictimId()
             + " dt=" + dt + "ms");
 
-        lastAction = action;
+        lastAction   = action;
+        lastBestType = bestType;
+        
         return action;
     }
 
     private double simulate(POMCPNode node, SimState s, int depth,
                             List<AgentAction.Type> available) {
         if (depth == 0 || terminal(s)) return 0.0;
-        if (node.isLeaf())             return rollout(s, depth);
 
-        AgentAction.Type at   = node.selectUCB(C, available);
-        AgentAction      a    = simAction(at, s);
-        SimState         next = dbn.transition(s, a);
-        ObservationSummary obsKey = synthObs(next);
-        double reward = rewardFn.compute(s, a, next);
+        AgentAction.Type at = node.selectUCB(C, available);
+        double total;
 
-        POMCPNode child = node.getOrCreate(at, obsKey);
-        double total = reward + GAMMA * simulate(child, next, depth - 1, available);
-        node.update(at, total);
+        if (node.isLeaf()) {
+            // Первый визит: rollout без рекурсии в дерево, но обновляем узел
+            total = rollout(s, depth - 1);
+        } else {
+            AgentAction        a      = simAction(at, s);
+            SimState           next   = dbn.transition(s, a);
+            ObservationSummary obsKey = synthObs(next);
+            double             reward = rewardFn.compute(s, a, next);
+            POMCPNode          child  = node.getOrCreate(at, obsKey);
+            total = reward + GAMMA * simulate(child, next, depth - 1, available);
+        }
+
+        node.update(at, total);  // обновляем всегда: и при rollout, и при раскрытии
         return total;
     }
 
@@ -123,15 +136,17 @@ public class POMCPPlanner {
     }
 
     private boolean terminal(SimState s) {
-        return s.victimHP.values().stream().allMatch(hp -> hp <= 0);
+        // Пустой поток → allMatch = true (vacuously), но в режиме EXPLORE жертв нет →
+        // это не терминальное состояние, продолжаем разведку
+        return !s.victimHP.isEmpty() && s.victimHP.values().stream().allMatch(hp -> hp <= 0);
     }
 
-    private POMCPNode advanceTree(AgentAction action, Observation obs) {
-        if (action == null) return new POMCPNode();
+    private POMCPNode advanceTree(AgentAction.Type actionType, Observation obs) {
+        if (actionType == null) return new POMCPNode();
         ObservationSummary os = new ObservationSummary(
             obs.victims.size(), obs.blockedRoads.size(),
             agentInfo.someoneOnBoard() != null);
-        return root.getOrCreate(action.type, os);
+        return root.getOrCreate(actionType, os);
     }
 
     private List<AgentAction.Type> availableActions(Belief belief) {
@@ -161,10 +176,12 @@ public class POMCPPlanner {
         return fsmAction;
     }
 
-    // Действие для симуляции внутри дерева (без PathPlanning) 
+    // Действие для симуляции внутри дерева (без PathPlanning)
+    // MOVE и REST различаются по наградe: MOVE=-1, REST=-5
     private AgentAction simAction(AgentAction.Type type, SimState s) {
         return switch (type) {
             case UNLOAD -> AgentAction.unload();
+            case MOVE   -> AgentAction.move(Collections.emptyList());   // нет пути, но тип MOVE
             case LOAD   -> {
                 EntityID v = s.victimHP.entrySet().stream()
                     .filter(e -> e.getValue() > 0)
