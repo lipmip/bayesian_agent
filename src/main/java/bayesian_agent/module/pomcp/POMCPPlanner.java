@@ -19,7 +19,7 @@ public class POMCPPlanner {
 
     private static final int    H     = 20;
     private static final int    N     = 500;
-    private static final double C     = 100.0;
+    private static final double C     = 1.5;   // для нормализованных Q ∈ [0,1]
     private static final double GAMMA = 0.95;
 
     private final AgentInfo              agentInfo;
@@ -143,8 +143,10 @@ public class POMCPPlanner {
 
     private POMCPNode advanceTree(AgentAction.Type actionType, Observation obs) {
         if (actionType == null) return new POMCPNode();
+        // Грубый ключ: bool(жертвы видны) + bool(несём) - стабилен между тиками
         ObservationSummary os = new ObservationSummary(
-            obs.victims.size(), obs.blockedRoads.size(),
+            obs.victims.isEmpty() ? 0 : 1,
+            0,
             agentInfo.someoneOnBoard() != null);
         return root.getOrCreate(actionType, os);
     }
@@ -190,18 +192,22 @@ public class POMCPPlanner {
                 yield v != null ? AgentAction.load(v) : AgentAction.rest();
             }
             case RESCUE -> {
+                // Погребённая жертва → rescue; иначе любая живая (нейтральный шаг, не -5 как REST)
                 EntityID b = s.victimBuriedness.entrySet().stream()
+                    .filter(e -> e.getValue() > 0 && s.victimHP.getOrDefault(e.getKey(), 0) > 0)
+                    .map(Map.Entry::getKey).findFirst().orElse(null);
+                if (b != null) yield AgentAction.rescue(b);
+                EntityID v = s.victimHP.entrySet().stream()
                     .filter(e -> e.getValue() > 0)
                     .map(Map.Entry::getKey).findFirst().orElse(null);
-                yield b != null ? AgentAction.rescue(b) : AgentAction.rest();
+                yield v != null ? AgentAction.rescue(v) : AgentAction.rest();
             }
             default -> AgentAction.rest();
         };
     }
 
     private ObservationSummary synthObs(SimState s) {
-        long a = s.victimHP.values().stream().filter(hp -> hp > 0).count();
-        long b = s.roadBlocked.values().stream().filter(v -> v).count();
-        return new ObservationSummary((int)a, (int)b, s.carryingVictim != null);
+        boolean anyAlive = s.victimHP.values().stream().anyMatch(hp -> hp > 0);
+        return new ObservationSummary(anyAlive ? 1 : 0, 0, s.carryingVictim != null);
     }
 }

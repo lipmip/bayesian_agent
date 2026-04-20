@@ -15,12 +15,26 @@ public class POMCPNode {
     private int totalVisits = 0;
 
     public AgentAction.Type selectUCB(double C, List<AgentAction.Type> actions) {
+        // Нормализуем Q по диапазону посещённых действий перед UCB
+        // Без нормализации: Q(LOAD)=418 >> C=100, и LOAD занимает 497/500 симуляций,
+        // лишая RESCUE каких-либо визитов
+        double qMin = Double.MAX_VALUE, qMax = -Double.MAX_VALUE;
+        for (AgentAction.Type a : actions) {
+            if (visits.getOrDefault(a, 0) > 0) {
+                double q = qValue.getOrDefault(a, 0.0);
+                if (q < qMin) qMin = q;
+                if (q > qMax) qMax = q;
+            }
+        }
+        if (qMin > qMax) { qMin = 0.0; qMax = 1.0; }
+        double range = Math.max(qMax - qMin, 1.0);
+
         AgentAction.Type best = null; double bestVal = Double.NEGATIVE_INFINITY;
         for (AgentAction.Type a : actions) {
             int n = visits.getOrDefault(a, 0);
-            double q = qValue.getOrDefault(a, 0.0);
+            double qNorm = (qValue.getOrDefault(a, 0.0) - qMin) / range;
             double ucb = (n == 0) ? Double.POSITIVE_INFINITY
-                : q + C * Math.sqrt(Math.log(totalVisits + 1.0) / n);
+                : qNorm + C * Math.sqrt(Math.log(totalVisits + 1.0) / n);
             if (ucb > bestVal) { bestVal = ucb; best = a; }
         }
         return best;

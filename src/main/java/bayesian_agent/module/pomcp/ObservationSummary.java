@@ -12,7 +12,9 @@ public class ObservationSummary {
         this.carrying            = carrying;
     }
 
+    // Грубый 4-значный ключ: V/N (любая жертва видна?) + C/E (несём жертву?)
+    // Точные счётчики меняются каждый тик → дерево никогда не переиспользуется
     public String key() {
-        return visibleVictimCount + "v" + visibleBlockedRoads + "r" + (carrying ? "C" : "E");
+        return (visibleVictimCount > 0 ? "V" : "N") + (carrying ? "C" : "E");
     }
 }
