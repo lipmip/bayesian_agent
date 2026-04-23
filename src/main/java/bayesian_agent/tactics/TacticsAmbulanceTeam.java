@@ -12,11 +12,14 @@ import adf.core.component.module.algorithm.PathPlanning;
 import bayesian_agent.action.ActionExecutor;
 import bayesian_agent.module.belief.Belief;
 import bayesian_agent.module.belief.BeliefManager;
+import bayesian_agent.module.communication.CommunicationManager;
 import bayesian_agent.module.observation.ObservationProcessor;
 import bayesian_agent.module.policy.AgentAction;
 import bayesian_agent.module.policy.ambulance.AmbulancePolicySelector;
+import bayesian_agent.module.pomcp.AgentMacroState;
 import bayesian_agent.module.pomcp.POMCPPlanner;
 import bayesian_agent.util.Logger;
+import rescuecore2.standard.entities.Road;
 import rescuecore2.worldmodel.ChangeSet;
 import rescuecore2.worldmodel.EntityID;
 import java.util.Locale;
@@ -32,8 +35,11 @@ public class TacticsAmbulanceTeam
     private PathPlanning            pathPlanning;
     private POMCPPlanner            pomcpPlanner;
 
-    // true = POMCP, false = эвристика  
+    // true = POMCP, false = эвристика
     private static final boolean USE_POMCP = true;
+
+    private final CommunicationManager commManager = new CommunicationManager();
+    private AgentMacroState prevMacroState = AgentMacroState.EXPLORE;
 
     // Метрики для сравнения эвристики vs POMCP
     private int victimsDelivered   = 0;
@@ -84,6 +90,14 @@ public class TacticsAmbulanceTeam
 
         Belief belief = beliefManager.getBelief();
 
+        // Принять подтверждения расчистки от полиции
+        for (EntityID road : commManager.receiveClearedRoads(msg)) {
+            belief.roadBlockedProb.put(road, 0.0);
+            belief.blockedRoads.remove(road);
+            belief.clearedRoads.add(road);
+            Logger.info(ai, "[COMM] road cleared confirmed: " + road);
+        }
+
         // Per-victim entropy - только в debug-режиме
         if (Logger.DEBUG) {
             for (Map.Entry<EntityID, Belief.VictimBelief> e : belief.victims.entrySet()) {
@@ -116,6 +130,26 @@ public class TacticsAmbulanceTeam
                 + " action=" + selectedAction.type
                 + " target=" + policySelector.getTargetVictimId());
         }
+
+        // При входе в WAIT_FOR_POLICE отправить запрос на расчистку
+        AgentMacroState curState = USE_POMCP
+            ? pomcpPlanner.getCurrentState()
+            : policySelector.getMacroState();
+        if (curState == AgentMacroState.WAIT_FOR_POLICE
+                && prevMacroState != AgentMacroState.WAIT_FOR_POLICE) {
+            EntityID blockedRoad = USE_POMCP
+                ? pomcpPlanner.getLastBlockedRoad()
+                : policySelector.getLastBlockedRoad();
+            if (blockedRoad != null) {
+                Road roadEntity = (Road) wi.getEntity(blockedRoad);
+                if (roadEntity != null) {
+                    commManager.sendRoadBlocked(msg, roadEntity, null);
+                    Logger.info(ai, "[COMM] sent RoadBlocked road=" + blockedRoad
+                        + " target=" + (USE_POMCP ? null : policySelector.getTargetVictimId()));
+                }
+            }
+        }
+        prevMacroState = curState;
 
         // Метрики
         if (selectedAction.type == AgentAction.Type.LOAD) {

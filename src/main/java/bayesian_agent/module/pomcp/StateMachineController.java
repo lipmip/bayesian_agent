@@ -29,6 +29,9 @@ public class StateMachineController {
     private EntityID        targetVictimId = null;
     private int             ticksInState   = 0;
 
+    // Последняя дорога, заблокировавшая путь к жертве при переходе в WAIT_FOR_POLICE
+    private EntityID lastBlockedRoad = null;
+
     // Stuck detection при транспортировке жертвы
     private final Set<EntityID> failedRefuges    = new HashSet<>();
     private EntityID currentRefugeTarget  = null;
@@ -163,6 +166,7 @@ public class StateMachineController {
                 targetVictimId = alt;
                 return AgentMacroState.NAVIGATE;
             }
+            lastBlockedRoad = findBlockedRoadOnPath(belief, pos, targetVictimId);
             return AgentMacroState.WAIT_FOR_POLICE;
         }
 
@@ -211,6 +215,20 @@ public class StateMachineController {
             if (prob != null && prob > 0.75) return true;
         }
         return false;
+    }
+
+    private EntityID findBlockedRoadOnPath(Belief belief, EntityID from, EntityID victimId) {
+        if (from == null || victimId == null) return null;
+        EntityID dest = getEntityPosition(victimId);
+        if (dest == null) return null;
+        List<EntityID> path = pathPlanning
+            .setFrom(from).setDestination(dest).calc().getResult();
+        if (path == null) return null;
+        for (EntityID step : path) {
+            Double prob = belief.roadBlockedProb.get(step);
+            if (prob != null && prob > 0.75) return step;
+        }
+        return null;
     }
 
     private EntityID pickBestVictim(Belief belief) {
@@ -336,6 +354,7 @@ public class StateMachineController {
         return buildRescueOrMoveAction(targetVictimId, belief);
     }
 
-    public AgentMacroState getCurrentState()   { return macroState; }
+    public AgentMacroState getCurrentState()    { return macroState; }
     public EntityID         getTargetVictimId() { return targetVictimId; }
+    public EntityID         getLastBlockedRoad() { return lastBlockedRoad; }
 }

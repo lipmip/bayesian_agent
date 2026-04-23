@@ -24,7 +24,8 @@ public class AmbulancePolicySelector {
         selectedAction = sm.tick(belief);
     }
 
-    public AgentAction     getSelectedAction() { return selectedAction; }
-    public AgentMacroState getMacroState()     { return sm.getCurrentState(); }
-    public EntityID        getTargetVictimId() { return sm.getTargetVictimId(); }
+    public AgentAction     getSelectedAction()  { return selectedAction; }
+    public AgentMacroState getMacroState()      { return sm.getCurrentState(); }
+    public EntityID        getTargetVictimId()  { return sm.getTargetVictimId(); }
+    public EntityID        getLastBlockedRoad() { return sm.getLastBlockedRoad(); }
 }

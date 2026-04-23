@@ -24,6 +24,9 @@ public class PoliceForcePolicySelector {
 
     private AgentAction selectedAction = AgentAction.rest();
 
+    // Приоритетная цель от PoliceOffice 
+    private EntityID overrideTarget = null;
+
     // Текущая целевая дорога (зафиксирована до расчистки)
     private EntityID committedRoad = null;
 
@@ -52,6 +55,10 @@ public class PoliceForcePolicySelector {
         this.pathPlanning = pathPlanning;
     }
 
+    public void setOverrideTarget(EntityID road) { this.overrideTarget = road; }
+    public EntityID getOverrideTarget()          { return overrideTarget; }
+    public void clearOverrideTarget()            { this.overrideTarget = null; }
+
     public void select(Belief belief) {
         int t = agentInfo.getTime();
         EntityID pos = agentInfo.getPosition();
@@ -59,6 +66,11 @@ public class PoliceForcePolicySelector {
         // Истёк срок блэклиста - убираем
         unreachableUntil.entrySet().removeIf(e -> e.getValue() <= t);
         unreachableRoads.removeIf(r -> !unreachableUntil.containsKey(r));
+
+        // Приоритетная цель от PoliceOffice: форсируем committedRoad
+        if (overrideTarget != null && belief.blockedRoads.contains(overrideTarget)) {
+            committedRoad = overrideTarget;
+        }
 
         // В ЗДАНИИ: выйти 
         if (pos != null && worldInfo.getEntity(pos) instanceof Building) {

@@ -12,10 +12,12 @@ import adf.core.component.module.algorithm.PathPlanning;
 import bayesian_agent.action.ActionExecutor;
 import bayesian_agent.module.belief.Belief;
 import bayesian_agent.module.belief.BeliefManager;
+import bayesian_agent.module.communication.CommunicationManager;
 import bayesian_agent.module.observation.ObservationProcessor;
 import bayesian_agent.module.policy.AgentAction;
 import bayesian_agent.module.policy.police.PoliceForcePolicySelector;
 import bayesian_agent.util.Logger;
+import rescuecore2.standard.entities.Road;
 import rescuecore2.worldmodel.ChangeSet;
 import rescuecore2.worldmodel.EntityID;
 
@@ -26,6 +28,8 @@ public class TacticsPoliceForce extends adf.core.component.tactics.TacticsPolice
     private PoliceForcePolicySelector policySelector;
     private ActionExecutor            actionExecutor;
     private PathPlanning              pathPlanning;
+
+    private final CommunicationManager commManager = new CommunicationManager();
 
     private EntityID prevPos = null;
     private int      samePosTicks = 0;
@@ -72,8 +76,23 @@ public class TacticsPoliceForce extends adf.core.component.tactics.TacticsPolice
         }
         prevPos = curPos;
 
+        // Принять приоритетные цели от PoliceOffice
+        for (EntityID road : commManager.receivePriorityRoads(msg)) {
+            policySelector.setOverrideTarget(road);
+            Logger.info(ai, "[COMM] override target=" + road);
+        }
+
         policySelector.select(belief);
         AgentAction chosen = policySelector.getSelectedAction();
+
+        // Если override-дорога расчищена - отправить подтверждение санитарам
+        EntityID ov = policySelector.getOverrideTarget();
+        if (ov != null && !belief.blockedRoads.contains(ov)) {
+            Road roadEntity = (Road) wi.getEntity(ov);
+            if (roadEntity != null) commManager.sendRoadCleared(msg, roadEntity);
+            policySelector.clearOverrideTarget();
+            Logger.info(ai, "[COMM] road cleared, sent: " + ov);
+        }
 
         Logger.info(ai, "[PF] t=" + ai.getTime()
             + " pos=" + curPos

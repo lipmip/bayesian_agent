@@ -42,6 +42,9 @@ public class POMCPPlanner {
     }
 
     // Вызывается каждый тик из TacticsAmbulanceTeam
+    public AgentMacroState getCurrentState()    { return sm.getCurrentState(); }
+    public EntityID         getLastBlockedRoad() { return sm.getLastBlockedRoad(); }
+
     public AgentAction selectAction(Belief belief, Observation obs) {
         long t0 = System.currentTimeMillis();
 
