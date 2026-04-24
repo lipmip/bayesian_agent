@@ -45,6 +45,22 @@ public class StateMachineController {
     // После исчерпания всех убежищ ждём перед повторной попыткой — даём полиции время расчистить путь.
     private static final int    ALL_REFUGES_FAILED_WAIT = 10;
 
+    // Bug 2: повторные таймауты навигации к одной жертве → пропустить её
+    private final Map<EntityID, Integer> navigateTimeouts = new HashMap<>();
+    private final Set<EntityID>          skipVictims      = new HashSet<>();
+    private static final int MAX_NAVIGATE_TIMEOUTS = 2;
+
+    // Bug 3: застрял в TRANSPORT (atLocation, но LOAD не срабатывает) → пропустить жертву
+    private int      transportLoadTicks  = 0;
+    private EntityID transportLoadTarget = null;
+    private static final int TRANSPORT_LOAD_TIMEOUT = 5;
+
+    // Bug 4: T5b-осциляция - жертва каждый тик недостижима (injCrit≤0.4), агент не входит в NAVIGATE
+    // Считаем consecutive тики с одной и той же недостижимой жертвой → пропускаем после порога
+    private EntityID lastT5bVictim  = null;
+    private int      t5bVictimTicks = 0;
+    private static final int T5B_VICTIM_TIMEOUT = 8;
+
     public StateMachineController(AgentInfo agentInfo, WorldInfo worldInfo,
                                   PathPlanning pathPlanning) {
         this.agentInfo    = agentInfo;
@@ -146,6 +162,33 @@ public class StateMachineController {
         // T6: b(VHP=Dead) > 0.8 → Explore
         if (tvb.pDead > 0.8) return AgentMacroState.EXPLORE;
 
+        // Bug 3: застряли в TRANSPORT - atLocation но LOAD не срабатывает (жертва недоступна)
+        if (macroState == AgentMacroState.TRANSPORT && agentInfo.someoneOnBoard() == null) {
+            if (!targetVictimId.equals(transportLoadTarget)) {
+                transportLoadTarget = targetVictimId;
+                transportLoadTicks  = 0;
+            }
+            transportLoadTicks++;
+            if (transportLoadTicks >= TRANSPORT_LOAD_TIMEOUT) {
+                Logger.warn(agentInfo, "[FSM] TRANSPORT load stuck " + transportLoadTicks
+                    + " ticks, skip victim=" + targetVictimId);
+                skipVictims.add(targetVictimId);
+                transportLoadTarget = null;
+                transportLoadTicks  = 0;
+                targetVictimId      = null;
+                return AgentMacroState.EXPLORE;
+            }
+        } else {
+            transportLoadTicks  = 0;
+            transportLoadTarget = null;
+        }
+
+        // Сбросить T5b-счётчик если жертва изменилась или путь теперь свободен
+        if (!targetVictimId.equals(lastT5bVictim)) {
+            lastT5bVictim  = null;
+            t5bVictimTicks = 0;
+        }
+
         // T3/T4: уже рядом с жертвой - действуем независимо от injCrit
         // Раз мы уже здесь, стоимость нулевая; порог injCrit только для навигации
         if (atVictimLocation(pos, targetVictimId)) {
@@ -157,7 +200,26 @@ public class StateMachineController {
         boolean pathBlocked = isPathBlockedToVictim(belief, pos, targetVictimId);
 
         // T5b: путь заблокирован, жертва не критична → разведка вместо ожидания
-        if (pathBlocked && injCrit <= 0.4) return AgentMacroState.EXPLORE;
+        if (pathBlocked && injCrit <= 0.4) {
+            if (targetVictimId.equals(lastT5bVictim)) {
+                t5bVictimTicks++;
+            } else {
+                lastT5bVictim  = targetVictimId;
+                t5bVictimTicks = 1;
+            }
+            if (t5bVictimTicks >= T5B_VICTIM_TIMEOUT) {
+                int timeouts = navigateTimeouts.merge(targetVictimId, 1, Integer::sum);
+                Logger.warn(agentInfo, "[FSM] T5b stuck " + t5bVictimTicks
+                    + " ticks, skip victim=" + targetVictimId + " timeouts=" + timeouts);
+                if (timeouts >= MAX_NAVIGATE_TIMEOUTS) {
+                    skipVictims.add(targetVictimId);
+                    Logger.warn(agentInfo, "[FSM] T5b skip victim=" + targetVictimId);
+                }
+                lastT5bVictim  = null;
+                t5bVictimTicks = 0;
+            }
+            return AgentMacroState.EXPLORE;
+        }
 
         // T5: путь заблокирован, жертва критична → ждать полицию (или идти к другой)
         if (pathBlocked) {
@@ -172,8 +234,13 @@ public class StateMachineController {
 
         // Таймаут NAVIGATE: если застряли без прогресса - сбросить цель и исследовать
         if (macroState == AgentMacroState.NAVIGATE && ticksInState > 15) {
+            int timeouts = navigateTimeouts.merge(targetVictimId, 1, Integer::sum);
             Logger.warn(agentInfo, "[FSM] NAVIGATE timeout (" + ticksInState
-                + " ticks), dropping target=" + targetVictimId);
+                + " ticks), dropping target=" + targetVictimId + " timeouts=" + timeouts);
+            if (timeouts >= MAX_NAVIGATE_TIMEOUTS) {
+                Logger.warn(agentInfo, "[FSM] skip victim=" + targetVictimId + " after " + timeouts + " timeouts");
+                skipVictims.add(targetVictimId);
+            }
             targetVictimId = null;
             return AgentMacroState.EXPLORE;
         }
@@ -232,9 +299,17 @@ public class StateMachineController {
     }
 
     private EntityID pickBestVictim(Belief belief) {
+        // Периодически сбрасываем skipVictims - жертва могла стать доступной
+        int t = agentInfo.getTime();
+        if (t % 100 == 0 && !skipVictims.isEmpty()) {
+            Logger.info(agentInfo, "[FSM] clearing skipVictims=" + skipVictims.size());
+            skipVictims.clear();
+            navigateTimeouts.clear();
+        }
         EntityID best = null;
         double bestScore = -1.0;
         for (Map.Entry<EntityID, Belief.VictimBelief> e : belief.victims.entrySet()) {
+            if (skipVictims.contains(e.getKey())) continue;
             Belief.VictimBelief vb = e.getValue();
             if (vb.pAlive() < 0.01) continue;
             EntityID victimPos = getEntityPosition(e.getKey());

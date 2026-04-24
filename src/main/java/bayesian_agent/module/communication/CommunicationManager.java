@@ -1,7 +1,6 @@
 package bayesian_agent.module.communication;
 
 import adf.core.agent.communication.MessageManager;
-import adf.core.agent.communication.standard.bundle.StandardMessagePriority;
 import adf.core.agent.communication.standard.bundle.centralized.CommandPolice;
 import adf.core.agent.communication.standard.bundle.information.MessageRoad;
 import adf.core.component.communication.CommunicationMessage;
@@ -24,11 +23,9 @@ public class CommunicationManager {
         msg.addMessage(new MessageRoad(true, road, null, true, false));
     }
 
-    // PoliceOffice → конкретному PoliceForce: расчисти эту дорогу 
-    public void sendPriorityRoad(MessageManager msg, EntityID toAgent, EntityID roadId) {
-        msg.addMessage(new CommandPolice(
-            true, StandardMessagePriority.HIGH,
-            toAgent, roadId, CommandPolice.ACTION_CLEAR));
+    // PoliceOffice → broadcast: расчисти эту дорогу (MessageRoad т.к. CommandPolice не доставляется полевым агентам)
+    public void sendPriorityRoad(MessageManager msg, Road road) {
+        msg.addMessage(new MessageRoad(true, road, null, false, true));
     }
 
     // Принять сообщения о заблокированных дорогах (passable=false) 

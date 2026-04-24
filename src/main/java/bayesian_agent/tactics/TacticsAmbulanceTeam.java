@@ -145,7 +145,7 @@ public class TacticsAmbulanceTeam
                 if (roadEntity != null) {
                     commManager.sendRoadBlocked(msg, roadEntity, null);
                     Logger.info(ai, "[COMM] sent RoadBlocked road=" + blockedRoad
-                        + " target=" + (USE_POMCP ? null : policySelector.getTargetVictimId()));
+                        + " target=" + (USE_POMCP ? pomcpPlanner.getTargetVictimId() : policySelector.getTargetVictimId()));
                 }
             }
         }

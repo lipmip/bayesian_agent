@@ -203,12 +203,37 @@ public class PoliceForcePolicySelector {
             }
         }
 
+        // Нет заблокированных дорог в belief → патрулировать, чтобы обнаружить новые завалы
+        AgentAction patrol = buildPatrolMove(pos);
+        if (patrol.type != AgentAction.Type.REST) {
+            Logger.info(agentInfo, "[PF] nothing to do → PATROL");
+            prevActionWasMove = true;
+            selectedAction = patrol;
+            return;
+        }
+
         Logger.info(agentInfo, "[PF] nothing to do → REST");
         prevActionWasMove = false;
         selectedAction = AgentAction.rest();
     }
 
-    // вспомогательные 
+    // вспомогательные
+
+    // Патрульное движение: случайный сосед → агент открывает новые части карты
+    private AgentAction buildPatrolMove(EntityID pos) {
+        if (pos == null) return AgentAction.rest();
+        StandardEntity e = worldInfo.getEntity(pos);
+        if (!(e instanceof rescuecore2.standard.entities.Area)) return AgentAction.rest();
+        List<EntityID> neighbours = ((rescuecore2.standard.entities.Area) e).getNeighbours();
+        if (neighbours.isEmpty()) return AgentAction.rest();
+        
+        // Детерминированный выбор соседа на основе агента + тика для равномерного покрытия
+        int idx = (Math.abs(agentInfo.getID().getValue()) + agentInfo.getTime()) % neighbours.size();
+        EntityID next = neighbours.get(idx);
+        List<EntityID> path = pathPlanning.setFrom(pos).setDestination(next).calc().getResult();
+        if (path != null && !path.isEmpty()) return AgentAction.move(path);
+        return AgentAction.rest();
+    }
 
     private AgentAction buildExitBuilding(EntityID buildingId) {
         StandardEntity e = worldInfo.getEntity(buildingId);
@@ -229,24 +254,24 @@ public class PoliceForcePolicySelector {
         EntityID victimRoad = pickRoadTowardVictim(belief, from);
         if (victimRoad != null) return victimRoad;
 
-        // Иначе: ближайшая заблокированная дорога по длине пути
-        EntityID best = null;
-        int bestLen = Integer.MAX_VALUE;
+        // Иначе: распределяем агентов по разным дорогам
+        // Агент выбирает дорогу по смещённому рейтингу (pathLen + agent-hash * tieBreaker)
+        // чтобы соседние агенты расходились по разным направлениям
         List<EntityID> candidates = new ArrayList<>(belief.blockedRoads);
         candidates.removeIf(r -> unreachableRoads.contains(r));
-        
-        // детерминировано распределяем агентов по разным дорогам
+        if (candidates.isEmpty()) return null;
         candidates.sort(Comparator.comparingInt(EntityID::getValue));
-        int offset = Math.abs(agentInfo.getID().getValue()) % Math.max(1, candidates.size());
-        
-        // пробуем от смещения по кругу
+
+        EntityID best = null;
+        double bestScore = Double.MAX_VALUE;
+        int agentHash = Math.abs(agentInfo.getID().getValue());
         for (int i = 0; i < candidates.size(); i++) {
-            EntityID road = candidates.get((offset + i) % candidates.size());
+            EntityID road = candidates.get(i);
             List<EntityID> path = pathPlanning.setFrom(from).setDestination(road).calc().getResult();
-            if (path != null && path.size() < bestLen) {
-                bestLen = path.size();
-                best = road;
-            }
+            if (path == null) continue;
+            // Добавляем agent-specific перестановку чтобы разные агенты предпочитали разные дороги
+            double score = path.size() + ((agentHash + i) % candidates.size()) * 0.1;
+            if (score < bestScore) { bestScore = score; best = road; }
         }
         return best;
     }

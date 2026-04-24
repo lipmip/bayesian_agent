@@ -76,8 +76,8 @@ public class TacticsPoliceForce extends adf.core.component.tactics.TacticsPolice
         }
         prevPos = curPos;
 
-        // Принять приоритетные цели от PoliceOffice
-        for (EntityID road : commManager.receivePriorityRoads(msg)) {
+        // Принять приоритетные цели: PoliceOffice ретранслирует как MessageRoad(blocked)
+        for (EntityID road : commManager.receiveBlockedRoads(msg)) {
             policySelector.setOverrideTarget(road);
             Logger.info(ai, "[COMM] override target=" + road);
         }
