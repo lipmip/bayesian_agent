@@ -173,8 +173,9 @@ public class POMCPPlanner {
     private AgentAction buildAction(AgentAction.Type type, Belief belief) {
         lastWasForced = false;
         if (type == AgentAction.Type.UNLOAD) return AgentAction.unload();
-        if (type == AgentAction.Type.REST)   return AgentAction.rest();
+        
         AgentAction fsmAction = sm.tick(belief);
+        if (type == AgentAction.Type.REST) return AgentAction.rest();
         if (type == AgentAction.Type.MOVE && fsmAction.type == AgentAction.Type.REST) {
             lastWasForced = true;
             return sm.buildForceNavigate(belief);

@@ -55,6 +55,9 @@ public class StateMachineController {
     private EntityID transportLoadTarget = null;
     private static final int TRANSPORT_LOAD_TIMEOUT = 5;
 
+    // Ззастрял в RESCUE - жертва не освобождается (уже подобрана другим агентом или недостижима)
+    private static final int RESCUE_TIMEOUT = 30;
+
     // Bug 4: T5b-осциляция - жертва каждый тик недостижима (injCrit≤0.4), агент не входит в NAVIGATE
     // Считаем consecutive тики с одной и той же недостижимой жертвой → пропускаем после порога
     private EntityID lastT5bVictim  = null;
@@ -144,7 +147,7 @@ public class StateMachineController {
     }
 
     private AgentMacroState evaluateTransition(Belief belief, EntityID pos) {
-        // Несём жертву → TRANSPORT
+        // T2: AG=Carrying → TRANSPORT (любое состояние, включая EXPLORE)
         if (agentInfo.someoneOnBoard() != null) {
             return AgentMacroState.TRANSPORT;
         }
@@ -157,12 +160,17 @@ public class StateMachineController {
         Belief.VictimBelief tvb = belief.victims.get(targetVictimId);
         if (tvb == null) return AgentMacroState.EXPLORE;
 
+        // Критичность: b(VHP=Critical) + b(VHP=Injured) > 0.4 
+        // (используем сумму двух категорий вместо одной b(Critical)>0.6 для учёта раненых)
         double injCrit = tvb.pInjured + tvb.pCritical;
 
         // T6: b(VHP=Dead) > 0.8 → Explore
         if (tvb.pDead > 0.8) return AgentMacroState.EXPLORE;
 
-        // Bug 3: застряли в TRANSPORT - atLocation но LOAD не срабатывает (жертва недоступна)
+        // Застряли в TRANSPORT - atLocation но LOAD не срабатывает
+        // Причина: жертва реально засыпана, но belief считает её свободной
+        // Решение: первый таймаут → пометить как засыпанную и попробовать RESCUE;
+        //          второй таймаут (likelyBuried уже true) → скипнуть.
         if (macroState == AgentMacroState.TRANSPORT && agentInfo.someoneOnBoard() == null) {
             if (!targetVictimId.equals(transportLoadTarget)) {
                 transportLoadTarget = targetVictimId;
@@ -170,17 +178,39 @@ public class StateMachineController {
             }
             transportLoadTicks++;
             if (transportLoadTicks >= TRANSPORT_LOAD_TIMEOUT) {
-                Logger.warn(agentInfo, "[FSM] TRANSPORT load stuck " + transportLoadTicks
-                    + " ticks, skip victim=" + targetVictimId);
-                skipVictims.add(targetVictimId);
                 transportLoadTarget = null;
                 transportLoadTicks  = 0;
-                targetVictimId      = null;
-                return AgentMacroState.EXPLORE;
+                Belief.VictimBelief tvbStuck = belief.victims.get(targetVictimId);
+                int rescueAttempts = navigateTimeouts.getOrDefault(targetVictimId, 0);
+                if (tvbStuck != null && rescueAttempts < 1) {
+                    // Первая попытка: пометить как засыпанную → RESCUE
+                    tvbStuck.likelyBuried = true;
+                    navigateTimeouts.merge(targetVictimId, 1, Integer::sum);
+                    Logger.warn(agentInfo, "[FSM] TRANSPORT load stuck, trying RESCUE victim="
+                        + targetVictimId);
+                    return AgentMacroState.RESCUE;
+                } else {
+                    // RESCUE не помог или жертвы нет в belief - скипаем
+                    Logger.warn(agentInfo, "[FSM] TRANSPORT load stuck after rescue, skip victim="
+                        + targetVictimId);
+                    skipVictims.add(targetVictimId);
+                    targetVictimId = null;
+                    return AgentMacroState.EXPLORE;
+                }
             }
         } else {
             transportLoadTicks  = 0;
             transportLoadTarget = null;
+        }
+
+        // RESCUE timeout - жертва не освобождается за RESCUE_TIMEOUT тиков → пропустить
+        if (macroState == AgentMacroState.RESCUE && ticksInState > RESCUE_TIMEOUT) {
+            Logger.warn(agentInfo, "[FSM] RESCUE timeout (" + ticksInState
+                + " ticks), skip victim=" + targetVictimId);
+            skipVictims.add(targetVictimId);
+            navigateTimeouts.merge(targetVictimId, MAX_NAVIGATE_TIMEOUTS, Math::max);
+            targetVictimId = null;
+            return AgentMacroState.EXPLORE;
         }
 
         // Сбросить T5b-счётчик если жертва изменилась или путь теперь свободен
@@ -261,9 +291,12 @@ public class StateMachineController {
             if (e.getKey().equals(excludeId)) continue;
             Belief.VictimBelief vb = e.getValue();
             if (vb.pAlive() < 0.01 || vb.pDead > 0.8) continue;
+
             EntityID victimPos = getEntityPosition(e.getKey());
-            if (victimPos != null && worldInfo.getEntity(victimPos) instanceof Refuge) continue;
+            if (victimPos == null) continue;
+            if (worldInfo.getEntity(victimPos) instanceof Refuge) continue;
             if (isPathBlockedToVictim(belief, pos, e.getKey())) continue;
+
             double score = (vb.pCritical * 2.0 + vb.pInjured) * vb.pAlive();
             if (score > bestScore) { bestScore = score; best = e.getKey(); }
         }
@@ -273,7 +306,7 @@ public class StateMachineController {
     private boolean isPathBlockedToVictim(Belief belief, EntityID from, EntityID victimId) {
         if (from == null || victimId == null) return false;
         EntityID dest = getEntityPosition(victimId);
-        if (dest == null) return false;
+        if (dest == null) return true;  // позиция неизвестна → недостижима
         List<EntityID> path = pathPlanning
             .setFrom(from).setDestination(dest).calc().getResult();
         if (path == null) return true;
@@ -299,12 +332,13 @@ public class StateMachineController {
     }
 
     private EntityID pickBestVictim(Belief belief) {
-        // Периодически сбрасываем skipVictims - жертва могла стать доступной
+        // Периодически даём второй шанс скипнутым жертвам (могли стать доступными)
+        // navigateTimeouts НЕ сбрасываются: уже-проваленные жертвы будут скипнуты
+        // быстрее (после 1 таймаута вместо 2), снижая потери на повторные попытки
         int t = agentInfo.getTime();
         if (t % 100 == 0 && !skipVictims.isEmpty()) {
             Logger.info(agentInfo, "[FSM] clearing skipVictims=" + skipVictims.size());
             skipVictims.clear();
-            navigateTimeouts.clear();
         }
         EntityID best = null;
         double bestScore = -1.0;
@@ -312,8 +346,10 @@ public class StateMachineController {
             if (skipVictims.contains(e.getKey())) continue;
             Belief.VictimBelief vb = e.getValue();
             if (vb.pAlive() < 0.01) continue;
+
             EntityID victimPos = getEntityPosition(e.getKey());
-            if (victimPos != null && worldInfo.getEntity(victimPos) instanceof Refuge) continue;
+            if (victimPos == null) continue;  // позиция неизвестна - нет смысла навигировать
+            if (worldInfo.getEntity(victimPos) instanceof Refuge) continue;
             double score = (vb.pCritical * 2.0 + vb.pInjured) * vb.pAlive();
             if (score > bestScore) {
                 bestScore = score;
@@ -364,8 +400,10 @@ public class StateMachineController {
         for (EntityID refugeId : worldInfo.getEntityIDsOfType(StandardEntityURN.REFUGE)) {
             if (pos.equals(refugeId)) return AgentAction.unload();
             if (failedRefuges.contains(refugeId)) continue;
+
             Belief.RefugeState state = belief.knownRefuges.get(refugeId);
-            if (state == Belief.RefugeState.FULL) continue;
+            if (state == Belief.RefugeState.FULL) continue;  // T13: RB=Full → выбрать другое убежище
+            
             List<EntityID> path = pathPlanning
                 .setFrom(pos).setDestination(refugeId).calc().getResult();
             if (path != null && !path.isEmpty() && path.size() < bestLen) {

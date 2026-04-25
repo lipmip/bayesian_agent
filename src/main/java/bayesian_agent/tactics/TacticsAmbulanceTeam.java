@@ -131,7 +131,7 @@ public class TacticsAmbulanceTeam
                 + " target=" + policySelector.getTargetVictimId());
         }
 
-        // При входе в WAIT_FOR_POLICE отправить запрос на расчистку
+        // T5: TELL(policeOffice, blockedEdge) при переходе NAVIGATE → WAIT_FOR_POLICE
         AgentMacroState curState = USE_POMCP
             ? pomcpPlanner.getCurrentState()
             : policySelector.getMacroState();

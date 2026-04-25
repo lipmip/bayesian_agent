@@ -56,6 +56,10 @@ public class ParticleFilter {
         Map<EntityID, Boolean> refuge  = new HashMap<>();
         for (Map.Entry<EntityID, Belief.VictimBelief> e : belief.victims.entrySet()) {
             Belief.VictimBelief vb = e.getValue();
+            // Жертвы с pAlive < 0.1 почти наверняка мертвы. Включение их в частицы даёт
+            // фантомные штрафы -200 за смерть на каждом шаге симуляции и делает Q(LOAD/RESCUE)
+            // отрицательным даже когда рядом есть живая цель.
+            if (vb.pAlive() < 0.1) continue;
             hp.put(e.getKey(),     sampleHP(vb));
             dmg.put(e.getKey(),    vb.estimatedDamageRate);
             buried.put(e.getKey(), vb.likelyBuried ? 1 : 0);
