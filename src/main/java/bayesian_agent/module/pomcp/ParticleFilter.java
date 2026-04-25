@@ -5,6 +5,7 @@ import adf.core.agent.info.WorldInfo;
 import bayesian_agent.module.belief.Belief;
 import bayesian_agent.module.observation.Observation;
 import bayesian_agent.module.policy.AgentAction;
+import bayesian_agent.util.Logger;
 import rescuecore2.standard.entities.Human;
 import rescuecore2.worldmodel.EntityID;
 import java.util.*;
@@ -13,8 +14,11 @@ import java.util.*;
 // Систематический ресэмплинг при ESS/N < 0.5
 public class ParticleFilter {
 
-    private static final int    N          = 500;
-    private static final double ESS_THRESH = 0.5;
+    private static final int    N            = 500;
+    private static final double ESS_THRESH   = 0.5;
+    private static final double INJECT_THRESH = 0.3;  // inject when ESS/N < 0.3
+    private static final double ALIVE_THRESH  = 0.3;  // inject when alive-particle fraction < 0.3
+    private static final double INJECT_RATIO  = 0.1;  // replace 10% of particles
 
     private final WorldInfo              worldInfo;
     private final AgentInfo              agentInfo;
@@ -33,57 +37,41 @@ public class ParticleFilter {
     }
 
     // Инициализировать из Belief
-    // Использует реальные данные из полей Belief (все уже существуют):
-    //   vb.estimatedDamageRate  → VDmg
-    //   belief.roadBlockedProb  → PC (вероятностная выборка)
-    //   belief.clearedRoads     → PC = Clear (детерминировано)
-    //   belief.buildingFireIntensity → FI
-    //   belief.knownRefuges     → RB
     public void initFromBelief(Belief belief) {
         particles.clear();
         EntityID pos      = agentInfo.getPosition();
-        Human onBoard     = agentInfo.someoneOnBoard();
+        Human    onBoard  = agentInfo.someoneOnBoard();
         EntityID carrying = onBoard != null ? onBoard.getID() : null;
-
-        for (int i = 0; i < N; i++) {
-            Map<EntityID, Integer> hp      = new HashMap<>();
-            Map<EntityID, Integer> dmg     = new HashMap<>();
-            Map<EntityID, Integer> buried  = new HashMap<>();
-            Map<EntityID, Boolean> blocked = new HashMap<>();
-            Map<EntityID, Integer> fire    = new HashMap<>();
-            Map<EntityID, Boolean> refuge  = new HashMap<>();
-
-            // VHP, VDmg, VB из VictimBelief
-            for (Map.Entry<EntityID, Belief.VictimBelief> e : belief.victims.entrySet()) {
-                Belief.VictimBelief vb = e.getValue();
-                hp.put(e.getKey(),    sampleHP(vb));
-                dmg.put(e.getKey(),   vb.estimatedDamageRate);
-                buried.put(e.getKey(), vb.likelyBuried ? 1 : 0);
-            }
-
-            // PC из roadBlockedProb (вероятностная выборка)
-            for (Map.Entry<EntityID, Double> e : belief.roadBlockedProb.entrySet()) {
-                blocked.put(e.getKey(), rng.nextDouble() < e.getValue());
-            }
-            // Расчищенные дороги - точно Clear
-            for (EntityID road : belief.clearedRoads) {
-                blocked.put(road, false);
-            }
-
-            // FI из buildingFireIntensity
-            fire.putAll(belief.buildingFireIntensity);
-
-            // RB из knownRefuges
-            for (Map.Entry<EntityID, Belief.RefugeState> e : belief.knownRefuges.entrySet())
-                refuge.put(e.getKey(), e.getValue() == Belief.RefugeState.FULL);
-
-            particles.add(new SimState(hp, dmg, buried, blocked, fire, refuge, pos, carrying));
-        }
+        for (int i = 0; i < N; i++)
+            particles.add(createParticle(belief, pos, carrying));
         Arrays.fill(weights, 1.0 / N);
     }
 
-    // Predict + Update после выполненного действия 
-    public void update(AgentAction lastAction, Observation obs) {
+    private SimState createParticle(Belief belief, EntityID pos, EntityID carrying) {
+        Map<EntityID, Integer> hp      = new HashMap<>();
+        Map<EntityID, Integer> dmg     = new HashMap<>();
+        Map<EntityID, Integer> buried  = new HashMap<>();
+        Map<EntityID, Boolean> blocked = new HashMap<>();
+        Map<EntityID, Integer> fire    = new HashMap<>();
+        Map<EntityID, Boolean> refuge  = new HashMap<>();
+        for (Map.Entry<EntityID, Belief.VictimBelief> e : belief.victims.entrySet()) {
+            Belief.VictimBelief vb = e.getValue();
+            hp.put(e.getKey(),     sampleHP(vb));
+            dmg.put(e.getKey(),    vb.estimatedDamageRate);
+            buried.put(e.getKey(), vb.likelyBuried ? 1 : 0);
+        }
+        for (Map.Entry<EntityID, Double> e : belief.roadBlockedProb.entrySet())
+            blocked.put(e.getKey(), rng.nextDouble() < e.getValue());
+        for (EntityID road : belief.clearedRoads)
+            blocked.put(road, false);
+        fire.putAll(belief.buildingFireIntensity);
+        for (Map.Entry<EntityID, Belief.RefugeState> e : belief.knownRefuges.entrySet())
+            refuge.put(e.getKey(), e.getValue() == Belief.RefugeState.FULL);
+        return new SimState(hp, dmg, buried, blocked, fire, refuge, pos, carrying);
+    }
+
+    // Predict + Update после выполненного действия
+    public void update(AgentAction lastAction, Observation obs, Belief belief) {
         ObservationSummary os = new ObservationSummary(
             obs.victims.size(),
             obs.blockedRoads.size(),
@@ -101,7 +89,45 @@ public class ParticleFilter {
         else
             Arrays.fill(weights, 1.0 / N);
 
-        if (ess() / N < ESS_THRESH) resample();
+        double essRatio = ess() / N;
+        if (essRatio < ESS_THRESH) resample();
+
+        // Инъекция частиц из belief против двух форм вырождения:
+        //   1. Низкий ESS (< INJECT_THRESH): стандартная дивергенция весов
+        //   2. Низкая доля живых частиц (< ALIVE_THRESH): жертвы умирают в DBN-переходах,
+        //      наблюдение "нет жертв рядом" даёт им likelihood=1.0 → фильтр сходится к мёртвым
+        //      (проверяем только если belief считает кого-то живым - иначе alive=0 норма)
+        long aliveParticles = 0;
+        for (SimState p : particles)
+            if (p.victimHP.values().stream().anyMatch(hp -> hp > 0)) aliveParticles++;
+
+        boolean beliefHasAlive = belief.victims.values().stream().anyMatch(v -> v.pAlive() > 0.01);
+        boolean aliveDegenerate = beliefHasAlive && (double) aliveParticles / N < ALIVE_THRESH;
+
+        if (essRatio < INJECT_THRESH || aliveDegenerate) {
+            int k = (int)(N * INJECT_RATIO);
+            inject(belief, k);
+            Logger.info(agentInfo, "[PF] inject ess=" + String.format("%.2f", essRatio)
+                + " alive=" + aliveParticles + "/" + N + " k=" + k);
+        }
+    }
+
+    private void inject(Belief belief, int count) {
+        EntityID pos      = agentInfo.getPosition();
+        Human    onBoard  = agentInfo.someoneOnBoard();
+        EntityID carrying = onBoard != null ? onBoard.getID() : null;
+
+        List<Integer> idx = new ArrayList<>(N);
+        for (int i = 0; i < N; i++) idx.add(i);
+        Collections.shuffle(idx, rng);
+
+        for (int k = 0; k < count; k++) {
+            particles.set(idx.get(k), createParticle(belief, pos, carrying));
+            weights[idx.get(k)] = 1.0 / N;
+        }
+        double sum = 0;
+        for (double w : weights) sum += w;
+        if (sum > 1e-10) for (int i = 0; i < N; i++) weights[i] /= sum;
     }
 
     public SimState sample() {

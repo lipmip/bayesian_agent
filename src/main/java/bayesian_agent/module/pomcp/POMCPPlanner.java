@@ -51,7 +51,7 @@ public class POMCPPlanner {
 
         boolean treeReused;
         if (lastAction != null) {
-            pf.update(lastAction, obs);
+            pf.update(lastAction, obs, belief);
 
             // Переиспользуем поддерево по типу, который POMCP выбрал (не обязательно тому, что FSM исполнил)
             // Частичный фильтр обновляется реальным действием (lastAction), дерево - намеренным (lastBestType)
