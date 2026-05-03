@@ -2,6 +2,7 @@ package bayesian_agent.tactics;
 
 import adf.core.agent.action.Action;
 import adf.core.agent.communication.MessageManager;
+import adf.core.agent.communication.standard.bundle.information.MessageCivilian;
 import adf.core.agent.develop.DevelopData;
 import adf.core.agent.info.AgentInfo;
 import adf.core.agent.info.ScenarioInfo;
@@ -19,11 +20,15 @@ import bayesian_agent.module.policy.ambulance.AmbulancePolicySelector;
 import bayesian_agent.module.pomcp.AgentMacroState;
 import bayesian_agent.module.pomcp.POMCPPlanner;
 import bayesian_agent.util.Logger;
+import rescuecore2.standard.entities.Civilian;
 import rescuecore2.standard.entities.Road;
+import rescuecore2.standard.entities.StandardEntity;
 import rescuecore2.worldmodel.ChangeSet;
 import rescuecore2.worldmodel.EntityID;
+import java.util.HashSet;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 public class TacticsAmbulanceTeam
         extends adf.core.component.tactics.TacticsAmbulanceTeam {
@@ -35,10 +40,13 @@ public class TacticsAmbulanceTeam
     private PathPlanning            pathPlanning;
     private POMCPPlanner            pomcpPlanner;
 
-    // true = POMCP, false = эвристика
-    private static final boolean USE_POMCP = true;
+    private static final boolean USE_POMCP = Boolean.parseBoolean(
+            System.getProperty("bayesian.use_pomcp", "true"));
+    private static final boolean USE_COMM  = Boolean.parseBoolean(
+            System.getProperty("bayesian.use_comm",  "true"));
 
-    private final CommunicationManager commManager = new CommunicationManager();
+    private final CommunicationManager commManager        = new CommunicationManager();
+    private final Set<EntityID>        broadcastedVictims = new HashSet<>();
     private AgentMacroState prevMacroState = AgentMacroState.EXPLORE;
 
     // Метрики для сравнения эвристики vs POMCP
@@ -91,11 +99,53 @@ public class TacticsAmbulanceTeam
         Belief belief = beliefManager.getBelief();
 
         // Принять подтверждения расчистки от полиции
-        for (EntityID road : commManager.receiveClearedRoads(msg)) {
-            belief.roadBlockedProb.put(road, 0.0);
-            belief.blockedRoads.remove(road);
-            belief.clearedRoads.add(road);
-            Logger.info(ai, "[COMM] road cleared confirmed: " + road);
+        if (USE_COMM) {
+            for (EntityID road : commManager.receiveClearedRoads(msg)) {
+                belief.roadBlockedProb.put(road, 0.0);
+                belief.blockedRoads.remove(road);
+                belief.clearedRoads.add(road);
+                Logger.info(ai, "[COMM] road cleared confirmed: " + road);
+            }
+
+            // Принять данные о жертвах от других агентов
+            for (MessageCivilian mc : commManager.receiveVictimInfo(msg)) {
+                if (!mc.isBuriednessDefined()) continue;
+                EntityID victimId = mc.getAgentID();
+                int buried = mc.getBuriedness();
+                Logger.info(ai, "[COMM] received VictimInfo victim=" + victimId
+                    + " buried=" + buried + " pos=" + mc.getPosition());
+                Belief.VictimBelief vb = belief.victims.get(victimId);
+                if (buried == 0) {
+                    // Пожарный освободил жертву: снять likelyBuried и убрать из skipVictims
+                    if (vb != null) vb.likelyBuried = false;
+                    if (USE_POMCP) pomcpPlanner.getStateMachine().notifyVictimFreed(victimId);
+                } else if (vb != null) {
+                    vb.likelyBuried = true;
+                }
+            }
+
+            // Отправить: один MessageCivilian за тик (голосовой канал = max 1 сообщение)
+            // Выбираем новую засыпанную жертву с наибольшим уроном (наиболее критичную)
+            Civilian bestToSend = null;
+            for (EntityID id : cs.getChangedEntities()) {
+                StandardEntity e = wi.getEntity(id);
+                if (!(e instanceof Civilian)) continue;
+                Civilian civ = (Civilian) e;
+                if (!civ.isBuriednessDefined() || civ.getBuriedness() <= 0) continue;
+                if (!civ.isHPDefined() || civ.getHP() <= 0) continue;
+                if (broadcastedVictims.contains(id)) continue;
+                if (bestToSend == null
+                        || (civ.isDamageDefined() && bestToSend.isDamageDefined()
+                            && civ.getDamage() > bestToSend.getDamage())) {
+                    bestToSend = civ;
+                }
+            }
+            if (bestToSend != null) {
+                commManager.sendVictimFound(msg, bestToSend);
+                broadcastedVictims.add(bestToSend.getID());
+                Logger.info(ai, "[COMM] sent VictimFound victim=" + bestToSend.getID()
+                    + " buried=" + bestToSend.getBuriedness());
+            }
         }
 
         // Per-victim entropy - только в debug-режиме
@@ -135,7 +185,8 @@ public class TacticsAmbulanceTeam
         AgentMacroState curState = USE_POMCP
             ? pomcpPlanner.getCurrentState()
             : policySelector.getMacroState();
-        if (curState == AgentMacroState.WAIT_FOR_POLICE
+        if (USE_COMM
+                && curState == AgentMacroState.WAIT_FOR_POLICE
                 && prevMacroState != AgentMacroState.WAIT_FOR_POLICE) {
             EntityID blockedRoad = USE_POMCP
                 ? pomcpPlanner.getLastBlockedRoad()
@@ -214,6 +265,6 @@ public class TacticsAmbulanceTeam
             + " lost=" + victimsLost
             + " inBelief=" + belief.victims.size()
             + " avgTripTicks=" + String.format(Locale.US, "%.1f", avg)
-            + " mode=" + (USE_POMCP ? "POMCP" : "heuristic"));
+            + " mode=" + (USE_POMCP ? (USE_COMM ? "POMCP+COMM" : "POMCP") : "heuristic"));
     }
 }

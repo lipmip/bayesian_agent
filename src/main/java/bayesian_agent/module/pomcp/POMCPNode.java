@@ -27,7 +27,11 @@ public class POMCPNode {
             }
         }
         if (qMin > qMax) { qMin = 0.0; qMax = 1.0; }
-        double range = Math.max(qMax - qMin, 1.0);
+        // Минимальный диапазон = 5% от масштаба Q-значений, но не меньше 1.0
+        // Без этого шум в 0.9 при Q~2300 нормализуется до 90% диапазона,
+        // и UCB жёстко эксплуатирует случайного победителя вместо исследования
+        double qAbsMax = Math.max(Math.abs(qMax), Math.abs(qMin));
+        double range = Math.max(qMax - qMin, Math.max(1.0, qAbsMax * 0.05));
 
         AgentAction.Type best = null; double bestVal = Double.NEGATIVE_INFINITY;
         for (AgentAction.Type a : actions) {

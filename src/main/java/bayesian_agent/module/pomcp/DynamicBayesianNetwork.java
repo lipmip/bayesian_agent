@@ -73,6 +73,14 @@ public class DynamicBayesianNetwork {
         else if (action.type == AgentAction.Type.UNLOAD)
             next.carryingVictim = null;
 
+        // MOVE: 1-шаговая модель - телепорт к жертве (цель закодирована в path[0])
+        if (action.type == AgentAction.Type.MOVE
+                && action.path != null && !action.path.isEmpty()) {
+            EntityID victimTarget = action.path.get(0);
+            EntityID targetArea   = next.victimPosition.get(victimTarget);
+            if (targetArea != null) next.agentPosition = targetArea;
+        }
+
         return next;
     }
 

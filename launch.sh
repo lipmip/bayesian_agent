@@ -15,6 +15,8 @@ LOADER="bayesian_agent.Loader"
 
 cd "$(dirname "$0")"
 
+JAR="$(ls build/libs/bayesian_agent-*.jar 2>/dev/null | head -1)"
+
 if [ -z "$1" ]; then
     echo "Использование: ./launch.sh [опции]"
     echo ""
@@ -48,4 +50,13 @@ if [ -z "$1" ]; then
     exit 0
 fi
 
-./gradlew launch --args="${LOADER} $*"
+# Передать флаги режима через переменные окружения (для run_experiments.sh)
+JVM_OPTS=""
+[ -n "$BAYESIAN_USE_POMCP" ] && JVM_OPTS="$JVM_OPTS -Dbayesian.use_pomcp=$BAYESIAN_USE_POMCP"
+[ -n "$BAYESIAN_USE_COMM"  ] && JVM_OPTS="$JVM_OPTS -Dbayesian.use_comm=$BAYESIAN_USE_COMM"
+
+if [ -n "$JAR" ]; then
+    exec java -Xmx1280m $JVM_OPTS -jar "$JAR" "$LOADER" "$@"
+else
+    ./gradlew launch --args="${LOADER} $*"
+fi

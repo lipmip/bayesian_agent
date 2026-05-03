@@ -2,6 +2,7 @@ package bayesian_agent.tactics;
 
 import adf.core.agent.action.Action;
 import adf.core.agent.communication.MessageManager;
+import adf.core.agent.communication.standard.bundle.information.MessageCivilian;
 import adf.core.agent.develop.DevelopData;
 import adf.core.agent.info.AgentInfo;
 import adf.core.agent.info.ScenarioInfo;
@@ -12,13 +13,18 @@ import adf.core.component.module.algorithm.PathPlanning;
 import bayesian_agent.action.ActionExecutor;
 import bayesian_agent.module.belief.Belief;
 import bayesian_agent.module.belief.BeliefManager;
+import bayesian_agent.module.communication.CommunicationManager;
 import bayesian_agent.module.observation.ObservationProcessor;
 import bayesian_agent.module.policy.fire.FireBrigadePolicySelector;
 import bayesian_agent.util.Logger;
+import rescuecore2.standard.entities.Civilian;
+import rescuecore2.standard.entities.StandardEntity;
 import rescuecore2.worldmodel.ChangeSet;
 import rescuecore2.worldmodel.EntityID;
+import java.util.HashSet;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 public class TacticsFireBrigade extends adf.core.component.tactics.TacticsFireBrigade {
 
@@ -27,6 +33,12 @@ public class TacticsFireBrigade extends adf.core.component.tactics.TacticsFireBr
     private FireBrigadePolicySelector policySelector;
     private ActionExecutor            actionExecutor;
     private PathPlanning              pathPlanning;
+
+    private static final boolean USE_COMM = Boolean.parseBoolean(
+            System.getProperty("bayesian.use_comm", "true"));
+
+    private final CommunicationManager commManager       = new CommunicationManager();
+    private final Set<EntityID>        broadcastedVictims = new HashSet<>();
 
     @Override
     public void initialize(AgentInfo ai, WorldInfo wi, ScenarioInfo si,
@@ -83,6 +95,49 @@ public class TacticsFireBrigade extends adf.core.component.tactics.TacticsFireBr
                 + " burning=" + belief.burningBuildings.size()
                 + " fireIntensityKnown=" + belief.buildingFireIntensity.size()
                 + " victims_tracked=" + belief.victims.size());
+        }
+
+        // Коммуникация: отправить засыпанных жертв, принять от других агентов
+        if (USE_COMM) {
+            // Отправить: один MessageCivilian за тик (голосовой канал = max 1 сообщение)
+            // Приоритет: только что освобождённая жертва (buriedness=0) > новая засыпанная с макс. уроном
+            Civilian bestToSend = null;
+            boolean bestIsFreed = false;
+            for (EntityID id : cs.getChangedEntities()) {
+                StandardEntity e = wi.getEntity(id);
+                if (!(e instanceof Civilian)) continue;
+                Civilian civ = (Civilian) e;
+                if (!civ.isBuriednessDefined() || !civ.isHPDefined()) continue;
+                if (civ.getHP() <= 0) continue;
+                boolean freed = civ.getBuriedness() == 0;
+                boolean buried = civ.getBuriedness() > 0;
+                if (buried && broadcastedVictims.contains(id)) continue;
+                if (bestToSend == null) { bestToSend = civ; bestIsFreed = freed; continue; }
+                // Освобождённые важнее засыпанных
+                if (freed && !bestIsFreed) { bestToSend = civ; bestIsFreed = true; continue; }
+                if (!freed && bestIsFreed) continue;
+                // Среди равных - выбираем с наибольшим уроном
+                if (civ.isDamageDefined() && bestToSend.isDamageDefined()
+                        && civ.getDamage() > bestToSend.getDamage()) {
+                    bestToSend = civ; bestIsFreed = freed;
+                }
+            }
+            if (bestToSend != null) {
+                commManager.sendVictimFound(msg, bestToSend);
+                if (bestToSend.getBuriedness() > 0) broadcastedVictims.add(bestToSend.getID());
+                Logger.info(ai, "[COMM] sent VictimFound victim=" + bestToSend.getID()
+                    + " buried=" + bestToSend.getBuriedness() + " hp=" + bestToSend.getHP());
+            }
+
+            // Принять: обновить policySelector данными от санитаров
+            for (MessageCivilian mc : commManager.receiveVictimInfo(msg)) {
+                if (!mc.isPositionDefined()) continue;
+                int buried = mc.isBuriednessDefined() ? mc.getBuriedness() : -1;
+                if (buried < 0) continue;
+                policySelector.addCommunicatedVictim(mc.getAgentID(), mc.getPosition(), buried);
+                Logger.info(ai, "[COMM] received VictimInfo victim=" + mc.getAgentID()
+                    + " buried=" + buried + " pos=" + mc.getPosition());
+            }
         }
 
         policySelector.select(belief);

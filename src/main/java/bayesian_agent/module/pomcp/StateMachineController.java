@@ -7,6 +7,7 @@ import bayesian_agent.module.belief.Belief;
 import bayesian_agent.module.policy.AgentAction;
 import bayesian_agent.util.Logger;
 import rescuecore2.standard.entities.Area;
+import rescuecore2.standard.entities.Civilian;
 import rescuecore2.standard.entities.Human;
 import rescuecore2.standard.entities.Refuge;
 import rescuecore2.standard.entities.StandardEntity;
@@ -55,14 +56,13 @@ public class StateMachineController {
     private EntityID transportLoadTarget = null;
     private static final int TRANSPORT_LOAD_TIMEOUT = 5;
 
-    // Ззастрял в RESCUE - жертва не освобождается (уже подобрана другим агентом или недостижима)
-    private static final int RESCUE_TIMEOUT = 30;
-
     // Bug 4: T5b-осциляция - жертва каждый тик недостижима (injCrit≤0.4), агент не входит в NAVIGATE
     // Считаем consecutive тики с одной и той же недостижимой жертвой → пропускаем после порога
     private EntityID lastT5bVictim  = null;
     private int      t5bVictimTicks = 0;
     private static final int T5B_VICTIM_TIMEOUT = 8;
+
+    private final Map<EntityID, Integer> lastVisitedTick = new HashMap<>();
 
     public StateMachineController(AgentInfo agentInfo, WorldInfo worldInfo,
                                   PathPlanning pathPlanning) {
@@ -132,9 +132,7 @@ public class StateMachineController {
             case EXPLORE         -> buildSearchMove();
             case NAVIGATE        -> buildRescueOrMoveAction(targetVictimId, belief);
             case WAIT_FOR_POLICE -> AgentAction.rest();
-            case RESCUE          -> targetVictimId != null
-                                    ? AgentAction.rescue(targetVictimId)
-                                    : AgentAction.rest();
+            case RESCUE          -> AgentAction.rest();  
             case TRANSPORT       -> {
                 if (agentInfo.someoneOnBoard() != null) {
                     yield buildUnloadAction(belief);
@@ -152,66 +150,48 @@ public class StateMachineController {
             return AgentMacroState.TRANSPORT;
         }
 
-        // Выбрать лучшую жертву
-        EntityID bestVictim = pickBestVictim(belief);
-        if (bestVictim == null) return AgentMacroState.EXPLORE;
-        targetVictimId = bestVictim;
-
-        Belief.VictimBelief tvb = belief.victims.get(targetVictimId);
-        if (tvb == null) return AgentMacroState.EXPLORE;
-
-        // Критичность: b(VHP=Critical) + b(VHP=Injured) > 0.4 
-        // (используем сумму двух категорий вместо одной b(Critical)>0.6 для учёта раненых)
-        double injCrit = tvb.pInjured + tvb.pCritical;
-
-        // T6: b(VHP=Dead) > 0.8 → Explore
-        if (tvb.pDead > 0.8) return AgentMacroState.EXPLORE;
-
-        // Застряли в TRANSPORT - atLocation но LOAD не срабатывает
-        // Причина: жертва реально засыпана, но belief считает её свободной
-        // Решение: первый таймаут → пометить как засыпанную и попробовать RESCUE;
-        //          второй таймаут (likelyBuried уже true) → скипнуть.
-        if (macroState == AgentMacroState.TRANSPORT && agentInfo.someoneOnBoard() == null) {
+        // TRANSPORT stuck: LOAD не срабатывает - проверяем до pickBestVictim,
+        // чтобы жертва не бросалась при временном выпадении из belief
+        if (macroState == AgentMacroState.TRANSPORT && targetVictimId != null) {
             if (!targetVictimId.equals(transportLoadTarget)) {
                 transportLoadTarget = targetVictimId;
                 transportLoadTicks  = 0;
             }
             transportLoadTicks++;
             if (transportLoadTicks >= TRANSPORT_LOAD_TIMEOUT) {
+                EntityID stuck = transportLoadTarget;
                 transportLoadTarget = null;
                 transportLoadTicks  = 0;
-                Belief.VictimBelief tvbStuck = belief.victims.get(targetVictimId);
-                int rescueAttempts = navigateTimeouts.getOrDefault(targetVictimId, 0);
-                if (tvbStuck != null && rescueAttempts < 1) {
-                    // Первая попытка: пометить как засыпанную → RESCUE
-                    tvbStuck.likelyBuried = true;
-                    navigateTimeouts.merge(targetVictimId, 1, Integer::sum);
-                    Logger.warn(agentInfo, "[FSM] TRANSPORT load stuck, trying RESCUE victim="
-                        + targetVictimId);
-                    return AgentMacroState.RESCUE;
-                } else {
-                    // RESCUE не помог или жертвы нет в belief - скипаем
-                    Logger.warn(agentInfo, "[FSM] TRANSPORT load stuck after rescue, skip victim="
-                        + targetVictimId);
-                    skipVictims.add(targetVictimId);
-                    targetVictimId = null;
-                    return AgentMacroState.EXPLORE;
-                }
+                Logger.warn(agentInfo, "[FSM] TRANSPORT load stuck, skip victim=" + stuck);
+                skipVictims.add(stuck);
+                targetVictimId = null;
+                // fall through to pickBestVictim for new target
+            } else {
+                return AgentMacroState.TRANSPORT;
             }
-        } else {
+        } else if (macroState != AgentMacroState.TRANSPORT) {
             transportLoadTicks  = 0;
             transportLoadTarget = null;
         }
 
-        // RESCUE timeout - жертва не освобождается за RESCUE_TIMEOUT тиков → пропустить
-        if (macroState == AgentMacroState.RESCUE && ticksInState > RESCUE_TIMEOUT) {
-            Logger.warn(agentInfo, "[FSM] RESCUE timeout (" + ticksInState
-                + " ticks), skip victim=" + targetVictimId);
-            skipVictims.add(targetVictimId);
-            navigateTimeouts.merge(targetVictimId, MAX_NAVIGATE_TIMEOUTS, Math::max);
-            targetVictimId = null;
-            return AgentMacroState.EXPLORE;
+        // Выбрать лучшую жертву
+        // В состоянии NAVIGATE не менять цель (предотвращает осцилляцию при равных скорах)
+        EntityID bestVictim = pickBestVictim(belief);
+        if (bestVictim == null) return AgentMacroState.EXPLORE;
+        if (macroState != AgentMacroState.NAVIGATE
+                || targetVictimId == null
+                || !belief.victims.containsKey(targetVictimId)) {
+            targetVictimId = bestVictim;
         }
+
+        Belief.VictimBelief tvb = belief.victims.get(targetVictimId);
+        if (tvb == null) return AgentMacroState.EXPLORE;
+
+        // Критичность: b(VHP=Critical) + b(VHP=Injured) > 0.4
+        double injCrit = tvb.pInjured + tvb.pCritical;
+
+        // T6: b(VHP=Dead) > 0.8 → Explore
+        if (tvb.pDead > 0.8) return AgentMacroState.EXPLORE;
 
         // Сбросить T5b-счётчик если жертва изменилась или путь теперь свободен
         if (!targetVictimId.equals(lastT5bVictim)) {
@@ -219,11 +199,20 @@ public class StateMachineController {
             t5bVictimTicks = 0;
         }
 
-        // T3/T4: уже рядом с жертвой - действуем независимо от injCrit
-        // Раз мы уже здесь, стоимость нулевая; порог injCrit только для навигации
+        // T3/T4: уже рядом с жертвой - пробуем грузить (AKLoad не требует buriedness=0)
         if (atVictimLocation(pos, targetVictimId)) {
-            if (tvb.likelyBuried) return AgentMacroState.RESCUE;
-            if (tvb.pAlive() > 0.1)  return AgentMacroState.TRANSPORT;
+            // Синхронизируем likelyBuried с worldInfo: TrafficSimulator отвергает AKLoad для засыпанных
+            int realBuried = getRealBuriedness(targetVictimId);
+            if (realBuried > 0) tvb.likelyBuried = true;
+            else if (realBuried == 0) tvb.likelyBuried = false;
+
+            if (tvb.likelyBuried) {
+                // Жертва ещё засыпана - не выдавать AKLoad. Идём к другой жертве или исследуем
+                EntityID alt = pickAccessibleVictim(belief, pos, targetVictimId);
+                if (alt != null) { targetVictimId = alt; return AgentMacroState.NAVIGATE; }
+                return AgentMacroState.EXPLORE;
+            }
+            if (tvb.pAlive() > 0.1) return AgentMacroState.TRANSPORT;
         }
 
         // Проверить доступность пути
@@ -364,8 +353,6 @@ public class StateMachineController {
         EntityID victimPos = getEntityPosition(victimId);
 
         if (agentPos != null && agentPos.equals(victimPos)) {
-            Belief.VictimBelief vb = belief.victims.get(victimId);
-            if (vb != null && vb.likelyBuried) return AgentAction.rescue(victimId);
             return AgentAction.load(victimId);
         }
 
@@ -435,16 +422,38 @@ public class StateMachineController {
         EntityID pos = agentInfo.getPosition();
         if (pos == null) return AgentAction.rest();
 
+        int t = agentInfo.getTime();
+        lastVisitedTick.put(pos, t);
+
         StandardEntity e = worldInfo.getEntity(pos);
-        if (e instanceof Area) {
-            List<EntityID> neighbours = ((Area) e).getNeighbours();
-            if (!neighbours.isEmpty()) {
-                EntityID next = neighbours.get((int)(Math.random() * neighbours.size()));
-                List<EntityID> path = pathPlanning
-                    .setFrom(pos).setDestination(next).calc().getResult();
-                if (path != null && !path.isEmpty())
-                    return AgentAction.move(path);
-            }
+        if (!(e instanceof Area)) return AgentAction.rest();
+
+        List<EntityID> neighbours = new ArrayList<>(((Area) e).getNeighbours());
+        if (neighbours.isEmpty()) return AgentAction.rest();
+
+        List<EntityID> unvisited = new ArrayList<>();
+        List<EntityID> visited   = new ArrayList<>();
+        for (EntityID nb : neighbours) {
+            (lastVisitedTick.containsKey(nb) ? visited : unvisited).add(nb);
+        }
+
+        List<EntityID> candidates;
+        if (!unvisited.isEmpty()) {
+            unvisited.sort(Comparator.comparingInt(EntityID::getValue));
+            int start = Math.abs(agentInfo.getID().getValue()) % unvisited.size();
+            candidates = new ArrayList<>();
+            for (int i = 0; i < unvisited.size(); i++)
+                candidates.add(unvisited.get((start + i) % unvisited.size()));
+        } else {
+            visited.sort((a, b) -> Integer.compare(lastVisitedTick.get(a), lastVisitedTick.get(b)));
+            candidates = visited;
+        }
+
+        for (EntityID next : candidates) {
+            List<EntityID> path = pathPlanning
+                .setFrom(pos).setDestination(next).calc().getResult();
+            if (path != null && !path.isEmpty()) return AgentAction.move(path);
+            lastVisitedTick.put(next, t);
         }
         return AgentAction.rest();
     }
@@ -465,6 +474,44 @@ public class StateMachineController {
     public AgentAction buildForceNavigate(Belief belief) {
         if (targetVictimId == null) return buildSearchMove();
         return buildRescueOrMoveAction(targetVictimId, belief);
+    }
+
+    // Возвращает buriedness из worldInfo: 0 = свободна, >0 = засыпана, -1 = нет данных
+    private int getRealBuriedness(EntityID victimId) {
+        StandardEntity e = worldInfo.getEntity(victimId);
+        if (!(e instanceof Civilian)) return -1;
+        Civilian civ = (Civilian) e;
+        if (!civ.isBuriednessDefined()) return -1;
+        return civ.getBuriedness();
+    }
+
+    private void logRescueProgress(EntityID victimId) {
+        StandardEntity e = worldInfo.getEntity(victimId);
+        if (!(e instanceof Civilian)) return;
+        Civilian civ = (Civilian) e;
+        int buried = civ.isBuriednessDefined() ? civ.getBuriedness() : -1;
+        int hp     = civ.isHPDefined()         ? civ.getHP()         : -1;
+        int dmg    = civ.isDamageDefined()      ? civ.getDamage()     : -1;
+        EntityID agentPos  = agentInfo.getPosition();
+        EntityID victimPos = civ.isPositionDefined() ? civ.getPosition() : null;
+        boolean sameArea   = agentPos != null && agentPos.equals(victimPos);
+        Logger.info(agentInfo, "[RESCUE] tick=" + agentInfo.getTime()
+            + " victim=" + victimId
+            + " buriedness=" + buried
+            + " hp=" + hp
+            + " dmg=" + dmg
+            + " rescueTick=" + ticksInState
+            + " agentPos=" + agentPos
+            + " victimPos=" + victimPos
+            + " sameArea=" + sameArea);
+    }
+
+    // Вызывается из TacticsAmbulanceTeam при получении COMM-сигнала об освобождённой жертве
+    public void notifyVictimFreed(EntityID victimId) {
+        skipVictims.remove(victimId);
+        navigateTimeouts.remove(victimId);
+        Belief.VictimBelief vb = null;  // belief недоступен здесь - очистим только skip/timeout
+        Logger.info(agentInfo, "[FSM] victim freed (COMM): removed from skipVictims id=" + victimId);
     }
 
     public AgentMacroState getCurrentState()    { return macroState; }

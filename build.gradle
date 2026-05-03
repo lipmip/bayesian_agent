@@ -58,5 +58,10 @@ task launch(type: JavaExec) {
     if (project.hasProperty('bayesian.debug')) {
         jvmArgs '-Dbayesian.debug=true'
     }
+    ['bayesian.use_pomcp', 'bayesian.use_comm'].each { prop ->
+        if (project.hasProperty(prop)) {
+            jvmArgs "-D${prop}=${project.property(prop)}"
+        }
+    }
     standardInput = System.in
 }

@@ -45,7 +45,9 @@ public class PoliceForcePolicySelector {
     // Детектор stuck при расчистке (repairCost не меняется)
     private int    lastRepairCost  = Integer.MAX_VALUE;
     private int    clearStuckCount = 0;
-    private static final int CLEAR_STUCK_THRESHOLD = 4;
+    private static final int CLEAR_STUCK_THRESHOLD = 2;
+
+    private final Map<EntityID, Integer> lastVisitedTick = new HashMap<>();
 
     public PoliceForcePolicySelector(AgentInfo agentInfo, WorldInfo worldInfo,
                                      ScenarioInfo scenarioInfo, PathPlanning pathPlanning) {
@@ -219,19 +221,44 @@ public class PoliceForcePolicySelector {
 
     // вспомогательные
 
-    // Патрульное движение: случайный сосед → агент открывает новые части карты
+    // Патрульное движение: обход по visited set - предпочитаем непосещённых соседей
     private AgentAction buildPatrolMove(EntityID pos) {
         if (pos == null) return AgentAction.rest();
+
+        int t = agentInfo.getTime();
+        lastVisitedTick.put(pos, t);
+
         StandardEntity e = worldInfo.getEntity(pos);
         if (!(e instanceof rescuecore2.standard.entities.Area)) return AgentAction.rest();
-        List<EntityID> neighbours = ((rescuecore2.standard.entities.Area) e).getNeighbours();
+
+        List<EntityID> neighbours = new ArrayList<>(
+            ((rescuecore2.standard.entities.Area) e).getNeighbours());
         if (neighbours.isEmpty()) return AgentAction.rest();
-        
-        // Детерминированный выбор соседа на основе агента + тика для равномерного покрытия
-        int idx = (Math.abs(agentInfo.getID().getValue()) + agentInfo.getTime()) % neighbours.size();
-        EntityID next = neighbours.get(idx);
-        List<EntityID> path = pathPlanning.setFrom(pos).setDestination(next).calc().getResult();
-        if (path != null && !path.isEmpty()) return AgentAction.move(path);
+
+        List<EntityID> unvisited = new ArrayList<>();
+        List<EntityID> visited   = new ArrayList<>();
+        for (EntityID nb : neighbours) {
+            (lastVisitedTick.containsKey(nb) ? visited : unvisited).add(nb);
+        }
+
+        List<EntityID> candidates;
+        if (!unvisited.isEmpty()) {
+            unvisited.sort(Comparator.comparingInt(EntityID::getValue));
+            int start = Math.abs(agentInfo.getID().getValue()) % unvisited.size();
+            candidates = new ArrayList<>();
+            for (int i = 0; i < unvisited.size(); i++)
+                candidates.add(unvisited.get((start + i) % unvisited.size()));
+        } else {
+            visited.sort((a, b) -> Integer.compare(lastVisitedTick.get(a), lastVisitedTick.get(b)));
+            candidates = visited;
+        }
+
+        for (EntityID next : candidates) {
+            List<EntityID> path = pathPlanning
+                .setFrom(pos).setDestination(next).calc().getResult();
+            if (path != null && !path.isEmpty()) return AgentAction.move(path);
+            lastVisitedTick.put(next, t);
+        }
         return AgentAction.rest();
     }
 

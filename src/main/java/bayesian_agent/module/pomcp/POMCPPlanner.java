@@ -28,10 +28,12 @@ public class POMCPPlanner {
     private final RewardFunction         rewardFn;
     private final StateMachineController sm;
 
-    private POMCPNode        root          = new POMCPNode();
-    private AgentAction      lastAction    = null;
-    private AgentAction.Type lastBestType  = null;  // тип, выбранный POMCP (для advancement дерева)
-    private boolean          lastWasForced = false;
+    private POMCPNode        root           = new POMCPNode();
+    private AgentAction      lastAction     = null;
+    private AgentAction.Type lastBestType   = null;
+    private boolean          lastWasForced  = false;
+    private int              emptyBeliefTicks = 0;
+    private static final int EMPTY_BELIEF_RESET = 3;  // сбросить дерево после N тиков без жертв
 
     public POMCPPlanner(AgentInfo ai, WorldInfo wi, PathPlanning pp) {
         this.agentInfo = ai;
@@ -42,9 +44,10 @@ public class POMCPPlanner {
     }
 
     // Вызывается каждый тик из TacticsAmbulanceTeam
-    public AgentMacroState getCurrentState()    { return sm.getCurrentState(); }
-    public EntityID         getLastBlockedRoad() { return sm.getLastBlockedRoad(); }
-    public EntityID         getTargetVictimId()  { return sm.getTargetVictimId(); }
+    public AgentMacroState        getCurrentState()    { return sm.getCurrentState(); }
+    public EntityID               getLastBlockedRoad() { return sm.getLastBlockedRoad(); }
+    public EntityID               getTargetVictimId()  { return sm.getTargetVictimId(); }
+    public StateMachineController getStateMachine()    { return sm; }
 
     public AgentAction selectAction(Belief belief, Observation obs) {
         long t0 = System.currentTimeMillis();
@@ -56,13 +59,31 @@ public class POMCPPlanner {
             // Переиспользуем поддерево по типу, который POMCP выбрал (не обязательно тому, что FSM исполнил)
             // Частичный фильтр обновляется реальным действием (lastAction), дерево - намеренным (lastBestType)
             AgentAction.Type advanceType = lastBestType != null ? lastBestType : lastAction.type;
-            POMCPNode advanced = advanceTree(advanceType, obs);
-            treeReused = advanced.getTotalVisits() > 0;
-            root = advanced;
+            // REST не продвигает агента - не переносить его отравленное поддерево
+            if (advanceType == AgentAction.Type.REST) {
+                root = new POMCPNode();
+                treeReused = false;
+            } else {
+                POMCPNode advanced = advanceTree(advanceType, obs);
+                treeReused = advanced.getTotalVisits() > 0;
+                root = advanced;
+            }
         } else {
             pf.initFromBelief(belief);
             root = new POMCPNode();
             treeReused = false;
+        }
+
+        // Сброс дерева при пустом belief - предотвращает Q-freeze на REST
+        if (belief.victims.isEmpty()) {
+            emptyBeliefTicks++;
+            if (emptyBeliefTicks >= EMPTY_BELIEF_RESET) {
+                root = new POMCPNode();
+                Logger.info(agentInfo, "[POMCP] tree reset: belief empty for " + emptyBeliefTicks + " ticks");
+                emptyBeliefTicks = 0;
+            }
+        } else {
+            emptyBeliefTicks = 0;
         }
 
         List<AgentAction.Type> available = availableActions(belief);
@@ -132,11 +153,18 @@ public class POMCPPlanner {
 
     private AgentAction.Type rolloutPolicy(SimState s) {
         if (s.carryingVictim != null) return AgentAction.Type.UNLOAD;
+        // LOAD только если агент уже рядом с незасыпанной живой жертвой
         for (Map.Entry<EntityID, Integer> e : s.victimHP.entrySet()) {
-            if (e.getValue() > 0 && s.isBuried(e.getKey())) return AgentAction.Type.RESCUE;
-            if (e.getValue() > 0 && e.getValue() <= 2999)   return AgentAction.Type.LOAD;
+            if (e.getValue() <= 0 || s.isBuried(e.getKey())) continue;
+            EntityID victimArea = s.victimPosition.get(e.getKey());
+            if (victimArea == null || victimArea.equals(s.agentPosition))
+                return AgentAction.Type.LOAD;
         }
-        return AgentAction.Type.MOVE;
+        // Иначе двигаться к живой жертве
+        for (Map.Entry<EntityID, Integer> e : s.victimHP.entrySet()) {
+            if (e.getValue() > 0) return AgentAction.Type.MOVE;
+        }
+        return AgentAction.Type.REST;
     }
 
     private boolean terminal(SimState s) {
@@ -160,38 +188,73 @@ public class POMCPPlanner {
             List.of(AgentAction.Type.MOVE, AgentAction.Type.REST));
         if (agentInfo.someoneOnBoard() != null)
             a.add(AgentAction.Type.UNLOAD);
-        else if (!belief.victims.isEmpty()) {
+        else if (!belief.victims.isEmpty())
             a.add(AgentAction.Type.LOAD);
-            a.add(AgentAction.Type.RESCUE);
-        }
         return a;
     }
 
     // Построить реальное действие
     // POMCP выбирает тип - FSM строит конкретный путь/цель
-    // Если POMCP решил MOVE, но FSM застрял в WAIT_FOR_POLICE → форсируем навигацию
+    // Переопределения: MOVE vs REST → форсируем навигацию; LOAD vs RESCUE → пробуем LOAD
     private AgentAction buildAction(AgentAction.Type type, Belief belief) {
         lastWasForced = false;
         if (type == AgentAction.Type.UNLOAD) return AgentAction.unload();
-        
+
         AgentAction fsmAction = sm.tick(belief);
-        if (type == AgentAction.Type.REST) return AgentAction.rest();
+
+        if (type == AgentAction.Type.REST) {
+            // REST принимается только когда FSM тоже заблокирован - иначе FSM знает лучше.
+            // Без этого детерминированный PF замораживает Q на REST и агент стоит вечно.
+            if (sm.getCurrentState() != AgentMacroState.WAIT_FOR_POLICE) {
+                lastWasForced = true;
+                return fsmAction;
+            }
+            return AgentAction.rest();
+        }
+
+        // POMCP → MOVE, FSM → REST (застрял в WAIT_FOR_POLICE): форсируем навигацию
         if (type == AgentAction.Type.MOVE && fsmAction.type == AgentAction.Type.REST) {
             lastWasForced = true;
             return sm.buildForceNavigate(belief);
         }
+
         return fsmAction;
     }
 
     // Действие для симуляции внутри дерева (без PathPlanning)
-    // MOVE и REST различаются по наградe: MOVE=-1, REST=-5
+    // MOVE телепортирует агента к цели (path[0] = victimId) - 1-шаговая модель
+    // LOAD ограничен жертвами на текущей позиции агента
     private AgentAction simAction(AgentAction.Type type, SimState s) {
         return switch (type) {
             case UNLOAD -> AgentAction.unload();
-            case MOVE   -> AgentAction.move(Collections.emptyList());   // нет пути, но тип MOVE
-            case LOAD   -> {
+            case MOVE -> {
+                // Целевая жертва: живая незасыпанная с известной позицией, не там где агент сейчас
+                EntityID target = s.victimHP.entrySet().stream()
+                    .filter(e -> e.getValue() > 0 && !s.isBuried(e.getKey()))
+                    .filter(e -> {
+                        EntityID vArea = s.victimPosition.get(e.getKey());
+                        return vArea != null && !vArea.equals(s.agentPosition);
+                    })
+                    .min(Comparator.comparingInt(Map.Entry::getValue))
+                    .map(Map.Entry::getKey).orElse(null);
+                if (target == null)  // позиции не известны или все рядом - любая живая
+                    target = s.victimHP.entrySet().stream()
+                        .filter(e -> e.getValue() > 0)
+                        .min(Comparator.comparingInt(Map.Entry::getValue))
+                        .map(Map.Entry::getKey).orElse(null);
+                yield target != null
+                    ? AgentAction.move(Collections.singletonList(target))
+                    : AgentAction.move(Collections.emptyList());
+            }
+            case LOAD -> {
+                // Только жертвы на текущей позиции агента; если позиций нет - разрешаем всё
                 EntityID v = s.victimHP.entrySet().stream()
-                    .filter(e -> e.getValue() > 0)
+                    .filter(e -> e.getValue() > 0 && !s.isBuried(e.getKey()))
+                    .filter(e -> {
+                        if (s.victimPosition.isEmpty()) return true;
+                        EntityID vArea = s.victimPosition.get(e.getKey());
+                        return vArea != null && vArea.equals(s.agentPosition);
+                    })
                     .min(Comparator.comparingInt(Map.Entry::getValue))
                     .map(Map.Entry::getKey).orElse(null);
                 yield v != null ? AgentAction.load(v) : AgentAction.rest();

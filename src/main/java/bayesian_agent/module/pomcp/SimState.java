@@ -22,6 +22,8 @@ public class SimState {
     public final Map<EntityID, Boolean> refugeFull;
     public EntityID carryingVictim;
     public EntityID agentPosition;
+    // victimId → EntityID области где жертва находится (нужно для проверки позиции при LOAD)
+    public Map<EntityID, EntityID> victimPosition = new HashMap<>();
 
     public SimState(Map<EntityID, Integer> victimHP,
                     Map<EntityID, Integer> victimDamageRate,
@@ -41,9 +43,11 @@ public class SimState {
     }
 
     public SimState deepCopy() {
-        return new SimState(victimHP, victimDamageRate, victimBuriedness,
-                            roadBlocked, fireFieryness, refugeFull,
-                            agentPosition, carryingVictim);
+        SimState copy = new SimState(victimHP, victimDamageRate, victimBuriedness,
+                                     roadBlocked, fireFieryness, refugeFull,
+                                     agentPosition, carryingVictim);
+        copy.victimPosition = new HashMap<>(victimPosition);
+        return copy;
     }
 
     public enum HPCategory { HEALTHY, INJURED, CRITICAL, DEAD }

@@ -2,6 +2,7 @@ package bayesian_agent.module.pomcp;
 
 import adf.core.agent.info.AgentInfo;
 import adf.core.agent.info.WorldInfo;
+import rescuecore2.standard.entities.StandardEntity;
 import bayesian_agent.module.belief.Belief;
 import bayesian_agent.module.observation.Observation;
 import bayesian_agent.module.policy.AgentAction;
@@ -71,7 +72,15 @@ public class ParticleFilter {
         fire.putAll(belief.buildingFireIntensity);
         for (Map.Entry<EntityID, Belief.RefugeState> e : belief.knownRefuges.entrySet())
             refuge.put(e.getKey(), e.getValue() == Belief.RefugeState.FULL);
-        return new SimState(hp, dmg, buried, blocked, fire, refuge, pos, carrying);
+        SimState state = new SimState(hp, dmg, buried, blocked, fire, refuge, pos, carrying);
+        for (EntityID victimId : hp.keySet()) {
+            StandardEntity e = worldInfo.getEntity(victimId);
+            if (e instanceof Human) {
+                EntityID victimPos = ((Human) e).getPosition();
+                if (victimPos != null) state.victimPosition.put(victimId, victimPos);
+            }
+        }
+        return state;
     }
 
     // Predict + Update после выполненного действия
