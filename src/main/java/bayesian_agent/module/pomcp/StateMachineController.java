@@ -514,6 +514,16 @@ public class StateMachineController {
         Logger.info(agentInfo, "[FSM] victim freed (COMM): removed from skipVictims id=" + victimId);
     }
 
+    // Вызывается после успешного UNLOAD: сбросить цель, добавить в skipVictims
+    // Без этого FSM остаётся в TRANSPORT и повторно грузит только что доставленную жертву из убежища
+    public void notifyDelivered(EntityID victimId) {
+        if (victimId != null) skipVictims.add(victimId);
+        if (victimId != null && victimId.equals(targetVictimId)) targetVictimId = null;
+        transportLoadTicks  = 0;
+        transportLoadTarget = null;
+        Logger.info(agentInfo, "[FSM] delivered, cleared target id=" + victimId);
+    }
+
     public AgentMacroState getCurrentState()    { return macroState; }
     public EntityID         getTargetVictimId() { return targetVictimId; }
     public EntityID         getLastBlockedRoad() { return lastBlockedRoad; }

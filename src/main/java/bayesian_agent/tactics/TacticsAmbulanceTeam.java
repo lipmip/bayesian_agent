@@ -208,7 +208,9 @@ public class TacticsAmbulanceTeam
         }
         if (selectedAction.type == AgentAction.Type.UNLOAD && ai.someoneOnBoard() != null) {
             // Удаляем жертву из belief сразу - не ждём обновления worldInfo
-            beliefManager.removeDeliveredVictim(ai.someoneOnBoard().getID());
+            EntityID deliveredId = ai.someoneOnBoard().getID();
+            beliefManager.removeDeliveredVictim(deliveredId);
+            if (USE_POMCP) pomcpPlanner.getStateMachine().notifyDelivered(deliveredId);
             if (loadTick >= 0) {
                 victimsDelivered++;
                 int tripTicks = ai.getTime() - loadTick;

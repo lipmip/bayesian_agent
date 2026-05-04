@@ -68,8 +68,11 @@ public class FireBrigadePolicySelector {
 
         EntityID buriedKnown = findNearestBuriedCivilian();
         if (buriedKnown != null) {
-            selectedAction = buildMoveTo(buriedKnown);
-            return;
+            AgentAction moveAction = buildMoveTo(buriedKnown);
+            if (moveAction.type != AgentAction.Type.REST) {
+                selectedAction = moveAction;
+                return;
+            }
         }
 
         selectedAction = buildSearchMove();
@@ -125,9 +128,15 @@ public class FireBrigadePolicySelector {
     private AgentAction buildMoveTo(EntityID targetCivilian) {
         EntityID pos = agentInfo.getPosition();
         if (pos == null) return AgentAction.rest();
+        EntityID dest = null;
         Civilian civ = (Civilian) worldInfo.getEntity(targetCivilian);
-        if (civ == null || !civ.isPositionDefined()) return AgentAction.rest();
-        EntityID dest = civ.getPosition();
+        if (civ != null && civ.isPositionDefined()) {
+            dest = civ.getPosition();
+        } else {
+            // жертва получена по коммуникации и ещё не наблюдалась напрямую
+            dest = communicatedVictims.get(targetCivilian);
+        }
+        if (dest == null) return AgentAction.rest();
         List<EntityID> path = pathPlanning.setFrom(pos).setDestination(dest).calc().getResult();
         if (path != null && !path.isEmpty()) return AgentAction.move(path);
         return AgentAction.rest();
