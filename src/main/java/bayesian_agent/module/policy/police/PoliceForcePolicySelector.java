@@ -48,6 +48,7 @@ public class PoliceForcePolicySelector {
     private static final int CLEAR_STUCK_THRESHOLD = 2;
 
     private final Map<EntityID, Integer> lastVisitedTick = new HashMap<>();
+    private EntityID patrolTarget = null;
 
     public PoliceForcePolicySelector(AgentInfo agentInfo, WorldInfo worldInfo,
                                      ScenarioInfo scenarioInfo, PathPlanning pathPlanning) {
@@ -221,45 +222,51 @@ public class PoliceForcePolicySelector {
 
     // вспомогательные
 
-    // Патрульное движение: обход по visited set - предпочитаем непосещённых соседей
+    // Патрульное движение: идём к наименее посещённой дороге карты (глобально, не только соседи)
     private AgentAction buildPatrolMove(EntityID pos) {
         if (pos == null) return AgentAction.rest();
 
         int t = agentInfo.getTime();
         lastVisitedTick.put(pos, t);
 
-        StandardEntity e = worldInfo.getEntity(pos);
-        if (!(e instanceof rescuecore2.standard.entities.Area)) return AgentAction.rest();
+        if (pos.equals(patrolTarget))
+            patrolTarget = null;
 
-        List<EntityID> neighbours = new ArrayList<>(
-            ((rescuecore2.standard.entities.Area) e).getNeighbours());
-        if (neighbours.isEmpty()) return AgentAction.rest();
+        if (patrolTarget == null)
+            patrolTarget = pickPatrolTarget(pos);
 
+        if (patrolTarget == null) return AgentAction.rest();
+
+        List<EntityID> path = pathPlanning
+            .setFrom(pos).setDestination(patrolTarget).calc().getResult();
+        if (path != null && !path.isEmpty()) return AgentAction.move(path);
+
+        // Цель недостижима - пометить и сбросить
+        lastVisitedTick.put(patrolTarget, t);
+        patrolTarget = null;
+        return AgentAction.rest();
+    }
+
+    // Выбор цели патруля: сначала ни разу не посещённые дороги, затем самая давняя
+    private EntityID pickPatrolTarget(EntityID from) {
         List<EntityID> unvisited = new ArrayList<>();
         List<EntityID> visited   = new ArrayList<>();
-        for (EntityID nb : neighbours) {
-            (lastVisitedTick.containsKey(nb) ? visited : unvisited).add(nb);
+        for (StandardEntity e : worldInfo) {
+            if (!(e instanceof Road)) continue;
+            EntityID id = e.getID();
+            if (id.equals(from)) continue;
+            (lastVisitedTick.containsKey(id) ? visited : unvisited).add(id);
         }
 
-        List<EntityID> candidates;
         if (!unvisited.isEmpty()) {
             unvisited.sort(Comparator.comparingInt(EntityID::getValue));
-            int start = Math.abs(agentInfo.getID().getValue()) % unvisited.size();
-            candidates = new ArrayList<>();
-            for (int i = 0; i < unvisited.size(); i++)
-                candidates.add(unvisited.get((start + i) % unvisited.size()));
-        } else {
+            return unvisited.get(Math.abs(agentInfo.getID().getValue()) % unvisited.size());
+        }
+        if (!visited.isEmpty()) {
             visited.sort((a, b) -> Integer.compare(lastVisitedTick.get(a), lastVisitedTick.get(b)));
-            candidates = visited;
+            return visited.get(0);
         }
-
-        for (EntityID next : candidates) {
-            List<EntityID> path = pathPlanning
-                .setFrom(pos).setDestination(next).calc().getResult();
-            if (path != null && !path.isEmpty()) return AgentAction.move(path);
-            lastVisitedTick.put(next, t);
-        }
-        return AgentAction.rest();
+        return null;
     }
 
     private AgentAction buildExitBuilding(EntityID buildingId) {
