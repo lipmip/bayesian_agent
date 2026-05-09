@@ -36,16 +36,33 @@ public class PoliceForcePolicySelector {
     private static final int UNREACHABLE_EXPIRY = 30;
     private final Map<EntityID, Integer> unreachableUntil = new HashMap<>();
 
+    // Блэклист конкретных блокад: завал, по которому не идёт прогресс,
+    // помечается чтобы pickBlockadeOnRoad/findNearbyBlockade его не выбирали
+    // Ключ = blockadeId, значение = тик, до которого блокада в чёрном списке
+    private final Map<EntityID, Integer> blockadeBlacklistUntil = new HashMap<>();
+    private static final int BLOCKADE_BLACKLIST_EXPIRY = 30;
+
     // Детектор stuck при движении к целевой дороге
     private double  lastX = Double.NaN, lastY = Double.NaN;
     private int     moveStuckCount   = 0;
     private boolean prevActionWasMove = false;   // не считать stuck во время CLEAR/REST
     private static final int MOVE_STUCK_THRESHOLD = 4;
 
-    // Детектор stuck при расчистке (repairCost не меняется)
-    private int    lastRepairCost  = Integer.MAX_VALUE;
-    private int    clearStuckCount = 0;
+    // Per-blockade tracking «cost не падает». Ключ = blockadeId,
+    // значение = последний наблюдённый repairCost для этого завала
+    private final Map<EntityID, Integer> lastRepairCostByBlockade = new HashMap<>();
+    // Per-blockade счётчик тиков без прогресса.
+    private final Map<EntityID, Integer> noProgressTicksByBlockade = new HashMap<>();
+    // Жёсткий watchdog: после N тиков без падения cost - заносим завал в блэклист
+    // Это срабатывает раньше moveToApex (CLEAR_STUCK_THRESHOLD=2) только когда
+    // мы уже были у этого завала достаточно долго: моток BLOCKADE_NO_PROGRESS_LIMIT > 2
+    private static final int BLOCKADE_NO_PROGRESS_LIMIT = 5;
     private static final int CLEAR_STUCK_THRESHOLD = 2;
+
+    // Минимальная дистанция от агента до центроида: если меньше, считаем
+    // что агент стоит ВНУТРИ полигона завала. CLEAR через себя бесполезен,
+    // так что такие блокады отфильтровываем и/или принудительно отступаем
+    private static final double DEGENERATE_TARGET_EPS = 500.0; // мм
 
     private final Map<EntityID, Integer> lastVisitedTick = new HashMap<>();
     private EntityID patrolTarget = null;
@@ -66,9 +83,22 @@ public class PoliceForcePolicySelector {
         int t = agentInfo.getTime();
         EntityID pos = agentInfo.getPosition();
 
-        // Истёк срок блэклиста - убираем
+        // Истёк срок блэклиста дорог - убираем
         unreachableUntil.entrySet().removeIf(e -> e.getValue() <= t);
         unreachableRoads.removeIf(r -> !unreachableUntil.containsKey(r));
+
+        // Истёк срок блэклиста конкретных блокад - убираем + лог
+        var bIter = blockadeBlacklistUntil.entrySet().iterator();
+        while (bIter.hasNext()) {
+            var entry = bIter.next();
+            if (entry.getValue() <= t) {
+                Logger.info(agentInfo, "[PF_BLOCKADE_UNBLACKLIST] blockade=" + entry.getKey()
+                    + " (expiry passed at t=" + t + ")");
+                lastRepairCostByBlockade.remove(entry.getKey());
+                noProgressTicksByBlockade.remove(entry.getKey());
+                bIter.remove();
+            }
+        }
 
         // Приоритетная цель от PoliceOffice: форсируем committedRoad
         if (overrideTarget != null && belief.blockedRoads.contains(overrideTarget)) {
@@ -83,68 +113,142 @@ public class PoliceForcePolicySelector {
             return;
         }
 
-        // НА ЗАБЛОКИРОВАННОЙ ДОРОГЕ: расчищать 
+        // НА ЗАБЛОКИРОВАННОЙ ДОРОГЕ: расчищать
         if (pos != null && belief.blockedRoads.contains(pos)) {
-            EntityID blockade = pickBlockadeOnRoad(pos);
+            EntityID blockade = pickBlockadeOnRoad(pos, t);
             if (blockade != null) {
                 StandardEntity be = worldInfo.getEntity(blockade);
                 if (be instanceof Blockade) {
                     Blockade bl = (Blockade) be;
                     int agentX = (int) agentInfo.getX();
                     int agentY = (int) agentInfo.getY();
+                    int curCost = bl.getRepairCost();
+                    double distToCent = Math.hypot(bl.getX()-agentX, bl.getY()-agentY);
 
-                    // Stuck-детектор: repairCost не меняется
-                    if (bl.getRepairCost() >= lastRepairCost) {
-                        clearStuckCount++;
+                    // Per-blockade tracking: сравниваем cost ИМЕННО этого завала
+                    Integer prevCost = lastRepairCostByBlockade.get(blockade);
+                    int noProgress = noProgressTicksByBlockade.getOrDefault(blockade, 0);
+                    if (prevCost != null && curCost >= prevCost) {
+                        noProgress++;
                     } else {
-                        clearStuckCount = 0;
+                        noProgress = 0;
                     }
-                    lastRepairCost = bl.getRepairCost();
+                    lastRepairCostByBlockade.put(blockade, curCost);
+                    noProgressTicksByBlockade.put(blockade, noProgress);
 
                     Logger.info(agentInfo, "[PF_CLEAR] road=" + pos
                         + " blockade=" + blockade
                         + " centroid=(" + bl.getX() + "," + bl.getY() + ")"
-                        + " repairCost=" + bl.getRepairCost()
-                        + " distToCent=" + (int) Math.hypot(bl.getX()-agentX, bl.getY()-agentY)
-                        + " clearStuck=" + clearStuckCount);
+                        + " repairCost=" + curCost
+                        + " distToCent=" + (int) distToCent
+                        + " noProgress=" + noProgress);
 
-                    if (clearStuckCount >= CLEAR_STUCK_THRESHOLD) {
-                        // Уже N тиков нет прогресса - двигаемся к ближайшему апексу
-                        // (агент мог застрять далеко от оставшихся тайлов)
-                        Logger.warn(agentInfo, "[PF_CLEAR_STUCK] repairCost=" + bl.getRepairCost()
-                            + " frozen → moveToApex");
-                        clearStuckCount = 0;
-                        lastRepairCost  = Integer.MAX_VALUE;
+                    // Watchdog #1: degenerate target - агент стоит в/у центроида
+                    // CLEAR через себя бесполезен, симулятор примет команду но
+                    // ни один тайл не уберётся. Заносим завал в блэклист и
+                    // отступаем к ближайшему апексу
+                    if (distToCent < DEGENERATE_TARGET_EPS) {
+                        Logger.warn(agentInfo, "[PF_DEGENERATE] xy≈centroid (dist="
+                            + (int) distToCent + " < " + (int) DEGENERATE_TARGET_EPS + ")"
+                            + " → blacklist blockade=" + blockade
+                            + " for " + BLOCKADE_BLACKLIST_EXPIRY + " ticks, step away");
+                        blacklistBlockade(blockade, t);
                         int[] ap = nearestApex(bl, agentX, agentY);
                         prevActionWasMove = true;
                         selectedAction = AgentAction.moveToPoint(ap[0], ap[1]);
                         return;
                     }
 
-                    // CLEAR: ActionExecutor сам масштабирует таргет к центроиду
-                    // в пределах clearRepairDistance. Никаких проверок дистанции здесь.
+                    // Watchdog #2: жёсткий лимит - N тиков подряд cost не падает
+                    // Срабатывает раньше, чем агент успеет застрять надолго,
+                    // и навсегда выводит проблемный завал из выбора (на M тиков)
+                    if (noProgress >= BLOCKADE_NO_PROGRESS_LIMIT) {
+                        Logger.warn(agentInfo, "[PF_NO_PROGRESS] blockade=" + blockade
+                            + " repairCost=" + curCost
+                            + " stuck " + noProgress + " ticks → blacklist for "
+                            + BLOCKADE_BLACKLIST_EXPIRY + " ticks");
+                        blacklistBlockade(blockade, t);
+                        // Сразу попробуем другую блокаду на этой же дороге в след. тик
+                        prevActionWasMove = false;
+                        selectedAction = AgentAction.rest();
+                        return;
+                    }
+
+                    // Watchdog #3: мягкий - moveToApex после CLEAR_STUCK_THRESHOLD
+                    // Сохранён, но теперь nearestApex возвращает РЕАЛЬНЫЙ апекс,
+                    // а не центроид, поэтому телепорт-в-центроид невозможен
+                    if (noProgress >= CLEAR_STUCK_THRESHOLD) {
+                        Logger.warn(agentInfo, "[PF_CLEAR_STUCK] repairCost=" + curCost
+                            + " noProgress=" + noProgress + " → moveToApex");
+                        int[] ap = nearestApex(bl, agentX, agentY);
+                        prevActionWasMove = true;
+                        selectedAction = AgentAction.moveToPoint(ap[0], ap[1]);
+                        return;
+                    }
+
+                    // CLEAR: ActionExecutor сам отодвигает target если он совпал
+                    // с позицией агента (защита от degenerate-сектора)
                     prevActionWasMove = false;
                     selectedAction = AgentAction.clear(blockade);
                     return;
                 }
             }
-            // Нет видимого завала - stale belief, идём на другую дорогу
-            Logger.info(agentInfo, "[PF] on blocked road=" + pos + " no blockade → find other");
-            clearStuckCount = 0;
-            lastRepairCost  = Integer.MAX_VALUE;
-            committedRoad   = null;
+            // Нет видимого завала / все в блэклисте - stale belief, идём на другую дорогу
+            Logger.info(agentInfo, "[PF] on blocked road=" + pos + " no usable blockade → find other");
+            committedRoad = null;
         }
 
         // CROSS-ROAD: завал на соседней дороге в радиусе расчистки - чистим не входя на неё
         if (pos != null) {
-            EntityID nearbyBlockade = findNearbyBlockade(belief, pos);
+            EntityID nearbyBlockade = findNearbyBlockade(belief, pos, t);
             if (nearbyBlockade != null) {
                 Blockade nbl = (Blockade) worldInfo.getEntity(nearbyBlockade);
                 int agentX = (int) agentInfo.getX(), agentY = (int) agentInfo.getY();
+                int curCost = nbl.getRepairCost();
+                double dist = Math.hypot(nbl.getX()-agentX, nbl.getY()-agentY);
+
+                // Per-blockade tracking — те же поля, что и для on-road CLEAR
+                Integer prevCost = lastRepairCostByBlockade.get(nearbyBlockade);
+                int noProgress = noProgressTicksByBlockade.getOrDefault(nearbyBlockade, 0);
+                if (prevCost != null && curCost >= prevCost) {
+                    noProgress++;
+                } else {
+                    noProgress = 0;
+                }
+                lastRepairCostByBlockade.put(nearbyBlockade, curCost);
+                noProgressTicksByBlockade.put(nearbyBlockade, noProgress);
+
                 Logger.info(agentInfo, "[PF_CROSS_CLEAR] blockade=" + nearbyBlockade
                     + " centroid=(" + nbl.getX() + "," + nbl.getY() + ")"
-                    + " dist=" + (int) Math.hypot(nbl.getX()-agentX, nbl.getY()-agentY)
-                    + " repairCost=" + nbl.getRepairCost());
+                    + " dist=" + (int) dist
+                    + " repairCost=" + curCost
+                    + " noProgress=" + noProgress);
+
+                // Watchdog: degenerate target в cross-режиме маловероятен (мы НЕ
+                // на дороге блокады), но всё равно защищаемся
+                if (dist < DEGENERATE_TARGET_EPS) {
+                    Logger.warn(agentInfo, "[PF_CROSS_DEGENERATE] xy≈centroid → blacklist blockade="
+                        + nearbyBlockade);
+                    blacklistBlockade(nearbyBlockade, t);
+                    prevActionWasMove = false;
+                    selectedAction = AgentAction.rest();
+                    return;
+                }
+
+                // Watchdog: cost не падает N тиков → блэклист
+                // Раньше для CROSS_CLEAR защиты вообще не было: агент мог
+                // вечно слать CLEAR на завал, до которого не достаёт сектор
+                if (noProgress >= BLOCKADE_NO_PROGRESS_LIMIT) {
+                    Logger.warn(agentInfo, "[PF_CROSS_NO_PROGRESS] blockade=" + nearbyBlockade
+                        + " repairCost=" + curCost
+                        + " stuck " + noProgress + " ticks → blacklist for "
+                        + BLOCKADE_BLACKLIST_EXPIRY + " ticks");
+                    blacklistBlockade(nearbyBlockade, t);
+                    prevActionWasMove = false;
+                    selectedAction = AgentAction.rest();
+                    return;
+                }
+
                 moveStuckCount = 0; lastX = Double.NaN; lastY = Double.NaN;
                 prevActionWasMove = false;
                 selectedAction = AgentAction.clear(nearbyBlockade);
@@ -340,57 +444,173 @@ public class PoliceForcePolicySelector {
         return blocked.get(idx);
     }
 
-    private EntityID pickBlockadeOnRoad(EntityID roadId) {
+    // Помечает блокаду как «не выбирать на N тиков» и сбрасывает её tracker
+    private void blacklistBlockade(EntityID blockadeId, int t) {
+        blockadeBlacklistUntil.put(blockadeId, t + BLOCKADE_BLACKLIST_EXPIRY);
+        lastRepairCostByBlockade.remove(blockadeId);
+        noProgressTicksByBlockade.remove(blockadeId);
+    }
+
+    private boolean isBlackBlockade(EntityID blockadeId, int t) {
+        Integer until = blockadeBlacklistUntil.get(blockadeId);
+        return until != null && until > t;
+    }
+
+    private EntityID pickBlockadeOnRoad(EntityID roadId, int t) {
         StandardEntity e = worldInfo.getEntity(roadId);
         if (!(e instanceof Road)) return null;
         Road road = (Road) e;
         if (!road.isBlockadesDefined() || road.getBlockades().isEmpty()) return null;
-        List<EntityID> blockades = new ArrayList<>(road.getBlockades());
-        blockades.sort(Comparator.comparingInt(EntityID::getValue));
-        int idx = Math.abs(agentInfo.getID().getValue()) % blockades.size();
-        return blockades.get(idx);
+
+        int agentX = (int) agentInfo.getX();
+        int agentY = (int) agentInfo.getY();
+
+        // Фильтруем (а) блокады в блэклисте; (б) с центроидом в xy агента
+        List<EntityID> usable = new ArrayList<>();
+        int skippedBlack = 0, skippedDegen = 0;
+        for (EntityID bid : road.getBlockades()) {
+            if (isBlackBlockade(bid, t)) { skippedBlack++; continue; }
+            StandardEntity be = worldInfo.getEntity(bid);
+            if (!(be instanceof Blockade)) continue;
+            Blockade bl = (Blockade) be;
+            double dist = Math.hypot(bl.getX() - agentX, bl.getY() - agentY);
+            if (dist < DEGENERATE_TARGET_EPS) { skippedDegen++; continue; }
+            usable.add(bid);
+        }
+        if (skippedBlack > 0 || skippedDegen > 0) {
+            Logger.info(agentInfo, "[PF_PICK_ON_ROAD] road=" + roadId
+                + " total=" + road.getBlockades().size()
+                + " usable=" + usable.size()
+                + " black=" + skippedBlack
+                + " degen=" + skippedDegen);
+        }
+        if (usable.isEmpty()) return null;
+
+        // Среди оставшихся выбираем ближайший к агенту по апексу
+        // (или центроиду как fallback). Tie-breaker - детерминированный
+        // hash от agentID, чтобы разные агенты разводились по целям
+        usable.sort(Comparator.comparingInt(EntityID::getValue));
+        EntityID best = null;
+        double bestDist = Double.MAX_VALUE;
+        for (EntityID bid : usable) {
+            Blockade bl = (Blockade) worldInfo.getEntity(bid);
+            double d = nearestApexDist(bl, agentX, agentY);
+            if (d < bestDist) { bestDist = d; best = bid; }
+        }
+        return best;
     }
 
-    // Ближайший апекс завала к агенту (физически доступный край полигона) 
-    private int[] nearestApex(Blockade bl, int agentX, int agentY) {
-        int nearX = bl.getX(), nearY = bl.getY();
-        double nearDist = Math.hypot(nearX - agentX, nearY - agentY);
+    // Расстояние до ближайшего апекса (или до центроида если апексов нет)
+    private double nearestApexDist(Blockade bl, int agentX, int agentY) {
         int[] apexes = bl.getApexes();
-        if (apexes != null) {
-            for (int i = 0; i < apexes.length / 2; i++) {
+        if (apexes == null || apexes.length < 2) {
+            return Math.hypot(bl.getX() - agentX, bl.getY() - agentY);
+        }
+        double best = Double.MAX_VALUE;
+        for (int i = 0; i < apexes.length / 2; i++) {
+            double d = Math.hypot(apexes[i*2] - agentX, apexes[i*2+1] - agentY);
+            if (d < best) best = d;
+        }
+        return best;
+    }
+
+    // Ближайший апекс завала к агенту (реальный край полигона, НЕ центроид)
+    // Раньше функция инициализировала nearDist расстоянием до центроида и
+    // обновляла его только если апекс был ближе - для агента, стоящего у
+    // центроида, это всегда возвращало центроид, что приводило к телепорту
+    // ВНУТРЬ блокады и зависанию навсегда. Теперь итерируем строго по апексам
+    // Если апексов нет (пустой полигон) - fallback в точку, отступающую от
+    // центроида в сторону агента, чтобы CLEAR-сектор был ненулевым
+    private int[] nearestApex(Blockade bl, int agentX, int agentY) {
+        int[] apexes = bl.getApexes();
+        if (apexes != null && apexes.length >= 2) {
+            int nearX = apexes[0], nearY = apexes[1];
+            double nearDist = Math.hypot(nearX - agentX, nearY - agentY);
+            for (int i = 1; i < apexes.length / 2; i++) {
                 int ax = apexes[i * 2], ay = apexes[i * 2 + 1];
                 double d = Math.hypot(ax - agentX, ay - agentY);
                 if (d < nearDist) { nearDist = d; nearX = ax; nearY = ay; }
             }
+            Logger.info(agentInfo, "[PF_APEX] real apex=(" + nearX + "," + nearY + ")"
+                + " dist=" + (int) nearDist
+                + " centroid=(" + bl.getX() + "," + bl.getY() + ")");
+            return new int[]{nearX, nearY};
         }
-        return new int[]{nearX, nearY};
+        // Fallback: отступить от центроида в сторону агента на ~1м
+        int cx = bl.getX(), cy = bl.getY();
+        double dx = agentX - cx, dy = agentY - cy;
+        double dist = Math.hypot(dx, dy);
+        if (dist < 1.0) {
+            // Агент в центроиде, апексов нет - двигаемся произвольно вверх на 1м
+            Logger.warn(agentInfo, "[PF_APEX] no apexes & agent==centroid, fallback +1000Y");
+            return new int[]{cx, cy + 1000};
+        }
+        double scale = Math.min(1000.0, dist) / dist;
+        int fx = cx + (int)(dx * scale);
+        int fy = cy + (int)(dy * scale);
+        Logger.info(agentInfo, "[PF_APEX] fallback (no apexes) → (" + fx + "," + fy + ")");
+        return new int[]{fx, fy};
     }
 
+    // Залочиваемся на одной cross-блокаде до её исчезновения / попадания в блэклист
+    // Раньше каждый тик брался max-cost в радиусе → агент пинг-понг между несколькими
+    // блокадами, ни одну не доводя до конца. Теперь - sticky target
+    private EntityID activeCrossTarget = null;
+
     //  Ищет завал на соседней заблокированной дороге в радиусе clearRepairDistance
-    //  Возвращает EntityID завала, который можно расчистить с текущей позиции без входа на ту дорогу. 
-    private EntityID findNearbyBlockade(Belief belief, EntityID currentPos) {
+    //  Возвращает EntityID завала, который можно расчистить с текущей позиции
+    //  без входа на ту дорогу. Дистанция считается по ближайшему апексу,
+    //  блокады в блэклисте и «через себя» отсекаются
+    private EntityID findNearbyBlockade(Belief belief, EntityID currentPos, int t) {
         int agentX  = (int) agentInfo.getX();
         int agentY  = (int) agentInfo.getY();
         int clearDist = scenarioInfo.getClearRepairDistance();
 
-        EntityID best     = null;
-        int      bestCost = 0;
+        // Sticky: если активная цель ещё валидна - продолжаем её
+        if (activeCrossTarget != null) {
+            StandardEntity be = worldInfo.getEntity(activeCrossTarget);
+            if (be instanceof Blockade bl
+                && !isBlackBlockade(activeCrossTarget, t)
+                && nearestApexDist(bl, agentX, agentY) <= clearDist
+                && Math.hypot(bl.getX() - agentX, bl.getY() - agentY) >= DEGENERATE_TARGET_EPS) {
+                return activeCrossTarget;
+            }
+            Logger.info(agentInfo, "[PF_CROSS_LOCK_RELEASE] activeCrossTarget="
+                + activeCrossTarget + " no longer valid → reselect");
+            activeCrossTarget = null;
+        }
+
+        EntityID best        = null;
+        double   bestApexDst = Double.MAX_VALUE;
+        int      skippedBlack = 0, skippedDegen = 0, skippedFar = 0;
         for (EntityID roadId : belief.blockedRoads) {
             if (roadId.equals(currentPos)) continue;
             StandardEntity re = worldInfo.getEntity(roadId);
-            
+
             if (!(re instanceof Road road)) continue;
             if (!road.isBlockadesDefined() || road.getBlockades().isEmpty()) continue;
-            
+
             for (EntityID blockadeId : road.getBlockades()) {
+                if (isBlackBlockade(blockadeId, t)) { skippedBlack++; continue; }
                 StandardEntity be = worldInfo.getEntity(blockadeId);
                 if (!(be instanceof Blockade bl)) continue;
-                double dist = Math.hypot(bl.getX() - agentX, bl.getY() - agentY);
-                if (dist <= clearDist && bl.getRepairCost() > bestCost) {
-                    bestCost = bl.getRepairCost();
+                double centDist = Math.hypot(bl.getX() - agentX, bl.getY() - agentY);
+                if (centDist < DEGENERATE_TARGET_EPS) { skippedDegen++; continue; }
+                double apexDist = nearestApexDist(bl, agentX, agentY);
+                if (apexDist > clearDist) { skippedFar++; continue; }
+                if (apexDist < bestApexDst) {
+                    bestApexDst = apexDist;
                     best = blockadeId;
                 }
             }
+        }
+        if (best != null) {
+            activeCrossTarget = best;
+            Logger.info(agentInfo, "[PF_CROSS_LOCK] new activeCrossTarget=" + best
+                + " apexDist=" + (int) bestApexDst
+                + " (skipped: black=" + skippedBlack
+                + " degen=" + skippedDegen
+                + " far=" + skippedFar + ")");
         }
         return best;
     }
